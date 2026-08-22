@@ -1,0 +1,214 @@
+TITLE:: BlipSync
+SUMMARY:: Band-limited harmonic-band oscillator with phase I/O and sub-sample hard sync
+CATEGORIES:: UGens>Generators>Deterministic
+RELATED:: Classes/Blip, Classes/Saw, Classes/Pulse, Classes/Phasor
+
+DESCRIPTION::
+
+A band-limited impulse train in the spirit of link::Classes/Blip::, rebuilt around
+four changes:
+
+LIST::
+## The band is specified in STRONG::Hz::, not as a harmonic count, so the spectral
+width does not follow the fundamental around.
+## The band edges are STRONG::fractional::. A harmonic fades in or out linearly
+instead of switching on or off, so sweeping any parameter produces no stepping,
+no crossfade transient and no zipper noise.
+## Every input is read STRONG::per sample::, so audio-rate FM and PM behave
+correctly. Blip samples its frequency input once per control block.
+## Phase is both an STRONG::input and an output::, and there is a sub-sample
+accurate hard sync input with polyBLEP step correction.
+::
+
+BlipSync returns TWO channels: code::[ waveform, phase ]::. The phase output is a
+0..1 ramp in cycles, intended for coupling, sync chains and analysis -- it is a
+raw sawtooth and is not band-limited, so do not listen to it directly.
+
+STRONG::How it works::
+
+The output is the closed form of a weighted cosine sum
+
+CODE::
+y(p) = (1/W) * sum_k  w_k * cos(2*pi*k*p)
+w_k  = clip(maxfreq/freq - k + 1, 0, 1) * clip(k - minfreq/freq + 1, 0, 1)
+::
+
+evaluated as a shifted Dirichlet kernel. The 0/0 singularity that sits exactly on
+the impulse peak is removed analytically rather than guarded against, so there is
+no reciprocal-sine table and no interpolation error: the waveform is accurate to
+about -218 dB, against about -51 dB for Blip.
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+ARGUMENT:: freq
+Fundamental frequency in Hz. Audio or control rate. Negative values run the
+oscillator backwards. Default 440.
+
+ARGUMENT:: maxfreq
+Top of the harmonic band in Hz -- the band limit. Harmonics are included up to
+this frequency, with the topmost one faded in fractionally. Internally clamped to
+just under Nyquist; when STRONG::freq:: itself rises past the limit the
+oscillator fades to silence instead of folding over. Default 20000.
+
+ARGUMENT:: minfreq
+Bottom of the harmonic band in Hz. 0 (the default) means the band starts at the
+fundamental, i.e. an ordinary impulse train. Raising it turns the oscillator into
+a band of harmonics -- a formant-like burst whose centre and width you dial in Hz,
+independently of pitch.
+
+ARGUMENT:: phase
+Phase offset in CYCLES (0..1), NOT radians. Added to the running phase rather
+than accumulated into it, so an audio-rate signal here is phase modulation. Note
+that the phase OUTPUT includes this offset. Default 0.
+
+ARGUMENT:: sync
+Sync input. See STRONG::syncMode::. Default 0.
+
+ARGUMENT:: syncPhase
+Phase, in cycles, to jump to when sync fires. Nonzero values give the classic
+offset hard-sync timbres. Default 0.
+
+ARGUMENT:: syncMode
+INIT RATE. code::0:: -- STRONG::sync:: is a trigger and fires on a rising
+crossing of zero; the crossing time is interpolated from the two samples either
+side. code::1:: -- STRONG::sync:: is a 0..1 phase ramp (another BlipSync's phase
+output, link::Classes/Phasor::, code::LFSaw.ar(f).range(0,1)::) and fires on the
+wrap. Mode 1 recovers the crossing time exactly and is the accurate way to chain
+oscillators. Default 0.
+
+ARGUMENT:: iphase
+INIT RATE. Initial phase in cycles. Use it to spread the starting phases of an
+oscillator bank. Default 0.
+
+ARGUMENT:: normalize
+INIT RATE. code::0:: -- peak normalisation, the waveform peaks at 1.0 like Blip;
+narrow bands are therefore quiet. code::1:: -- RMS normalisation, roughly
+constant loudness as the band width changes, which is usually what you want when
+sweeping STRONG::maxfreq::. Default 0.
+
+METHOD:: arSig
+As code::ar::, but returns only the waveform channel and accepts
+code::mul:: / code::add::.
+
+EXAMPLES::
+
+CODE::
+s.boot;
+
+// 1. the basic thing: bandwidth in Hz, so timbre stays put across the keyboard
+(
+{
+    var f = MouseX.kr(50, 800, 1);
+    BlipSync.ar(f, 4000).at(0) * 0.2 ! 2
+}.play
+)
+
+// compare with Blip, where a fixed harmonic count means the brightness
+// tracks the pitch and the harmonics audibly step in and out
+(
+{
+    var f = MouseX.kr(50, 800, 1);
+    Blip.ar(f, 20) * 0.2 ! 2
+}.play
+)
+
+// 2. sweeping the band limit: no stepping, no zipper
+(
+{
+    var top = SinOsc.kr(0.2).exprange(300, 16000);
+    BlipSync.ar(110, top, normalize: 1).at(0) * 0.2 ! 2
+}.play
+)
+
+// 3. minfreq turns it into a moving band of harmonics (formant-ish)
+(
+{
+    var centre = SinOsc.kr(0.13).exprange(300, 5000);
+    var width  = 800;
+    BlipSync.ar(80, centre + width, (centre - width).max(0), normalize: 1).at(0) * 0.2 ! 2
+}.play
+)
+
+// 4. audio-rate FM actually works here
+(
+{
+    var mod = SinOsc.ar(XLine.kr(1, 800, 8)) * 200;
+    BlipSync.ar(220 + mod, 8000).at(0) * 0.2 ! 2
+}.play
+)
+
+// 5. hard sync from a phase-ramp master (syncMode 1 -- sample-exact)
+(
+{
+    var master = Phasor.ar(0, 110 * SampleDur.ir, 0, 1);
+    var slave  = BlipSync.ar(
+        freq: MouseX.kr(110, 2200, 1),
+        maxfreq: 8000,
+        sync: master,
+        syncMode: 1
+    );
+    slave[0] * 0.2 ! 2
+}.play
+)
+
+// 6. phase output -> Kuramoto-style coupling between two oscillators.
+// Each oscillator pulls its frequency toward the other's phase.
+(
+{
+    var k = MouseY.kr(0, 60);
+    var fb = LocalIn.ar(2);                 // the two phase outputs, 0..1
+    var d  = sin(2pi * (fb[1] - fb[0]));    // phase difference
+    var a  = BlipSync.ar(200 + (k * d),      6000, iphase: 0.0);
+    var b  = BlipSync.ar(203 - (k * d),      6000, iphase: 0.37);
+    LocalOut.ar([a[1], b[1]]);
+    (a[0] + b[0]) * 0.15 ! 2
+}.play
+)
+
+// 7. phase offset as an audio-rate input = phase modulation
+(
+{
+    var pm = SinOsc.ar(220) * MouseX.kr(0, 1);
+    BlipSync.ar(220, 6000, phase: pm).at(0) * 0.2 ! 2
+}.play
+)
+
+// 8. an oscillator bank with spread initial phases
+(
+{
+    var n = 8;
+    Mix.fill(n, { |i|
+        BlipSync.ar(100 * (i + 1), 12000, iphase: i / n).at(0)
+    }) * 0.05 ! 2
+}.play
+)
+::
+
+STRONG::Notes::
+
+LIST::
+## Hard sync responds one sample after the detected edge: the crossing is found
+between two samples, and the polyBLEP correction can only be scheduled forward.
+There is no output latency.
+## Hard sync is the only remaining aliasing source, and it is inherent -- a step
+discontinuity has infinite bandwidth. The correction puts it around -28 dB
+relative to the signal, against -19 dB for an uncorrected reset. Lowering
+STRONG::maxfreq:: reduces it further.
+## The fractional top edge sits one harmonic above STRONG::maxfreq::. If that
+would cross Nyquist it is dropped, which reintroduces stepping at the very top.
+Keep STRONG::maxfreq:: at least one harmonic spacing below Nyquist -- the 20000
+default does so for any fundamental under about 4 kHz.
+## A fundamental above the band limit fades out rather than folding over.
+## The band limit applies to the UNMODULATED spectrum. Deep FM or PM spreads each
+harmonic well past STRONG::maxfreq:: and will alias; lower STRONG::maxfreq:: when
+modulating hard.
+## code::normalize: 1:: holds the RMS at 0.707 for any bandwidth, so the peak is
+sqrt(W) -- about 7.4 for a 54-harmonic band. Scale accordingly.
+## code::ar:: has no mul/add because it returns two channels and madd would scale
+the phase output too. Use code::.at(0) * amp:: or link::#*arSig::.
+## CPU is about 0.10% of one core per voice with control-rate parameters, 0.21%
+when freq, minfreq or maxfreq is audio rate -- independent of how many harmonics
+the band contains.
+::
