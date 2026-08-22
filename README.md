@@ -6,8 +6,8 @@ function of every parameter, all inputs run at audio rate, and phase is both an
 input and an output.
 
 ```
-[ sig, phase ] = BlipSync.ar(freq, maxfreq, minfreq, phase, sync,
-                             syncPhase, syncMode, iphase, normalize)
+[ sig, phase ] = BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
+                             syncMode, iphase, normalize, rotate, tilt)
 ```
 
 Build:
@@ -127,6 +127,75 @@ The band description is only rebuilt when `freq`, `minfreq` or `maxfreq` actuall
 moves, which is where the difference between 0.10% and 0.21% of a core comes
 from.
 
+### Asymmetric impulses: `rotate`
+
+The pulse is symmetric because every harmonic is a zero-phase cosine. Rotating
+them all by the *same* angle φ — not `k·φ`, which is only a time shift and is
+what the `phase` input already does — makes it asymmetric:
+
+```
+y(p) = (1/W) Σ w_k cos(2πkp + φ)
+```
+
+`rotate` is in cycles: 0 is the symmetric impulse, 0.25 its Hilbert transform (a
+sharp edge on one side and a slow tail on the other), 0.5 the inverted impulse.
+
+The point of doing it this way is that **the magnitude spectrum is untouched**,
+so it cannot alias and adds no bandwidth — measured at 0.0000 dB change on every
+one of 40 harmonics. It is safe to modulate at audio rate, unlike PM: the
+modulation index does not scale with `k`, so the sideband spread stays bounded.
+
+Measured waveshape, f0 = 200 Hz, band 8 kHz:
+
+| rotate | peak | trough | skewness |
+|---|---|---|---|
+| 0 | +1.000 | −0.225 | +6.54 |
+| 0.125 | +0.926 | −0.468 | +4.62 |
+| 0.25 | +0.727 | −0.727 | 0.00 |
+| 0.5 | +0.225 | −1.000 | −6.54 |
+
+Because only the phases move, **RMS is exactly invariant** — rotating does not
+change loudness, it changes the crest factor. In peak-normalised mode the
+waveform peak drops to 0.73 at `rotate: 0.25`, which is extra headroom, not a
+level drop. (RMS mode is therefore *not* needed to keep the level steady across
+this knob, contrary to what one might expect.)
+
+Rotation is most audible on impulsive material — low fundamentals where each
+period reads as a distinct event — and much less so on steady tones up high.
+
+### Softer pulses: `tilt`
+
+The trapezoid is a brick wall, so the impulse has sinc-like ringing and negative
+side lobes: the hard, buzzy character. Weighting harmonics by `r^(k−1)` instead
+gives a Poisson kernel — strictly positive, smooth, no ringing — which is what
+makes Csound's `gbuzz` sound unlike `buzz`.
+
+`tilt` is in dB per kHz, referenced to the fundamental, so like everything else
+here it stays put when the pitch moves. It applies *underneath* the `maxfreq`
+brick wall, so the alias-free guarantee is unaffected. Measured slope error:
+0.004 dB/kHz.
+
+This matters more than it looks if there is saturation downstream. A brick-wall
+BLIT has crest factor `sqrt(2W)`, so `tanh` mostly flattens the spike tip and
+leaves the rest near-linear; a tilted pulse is wider and less peaky, so the same
+drive distorts it far more evenly — and generates less aliasing of its own.
+
+Both features fall out of one complex geometric series, `z = r·e^{i2πp}`:
+
+```
+S = z^A (1 − z^n) / (1 − z) + edge terms
+y = Re( e^{iφ} · S ) · norm
+```
+
+`1 − z^m` is formed as `(1 − r^m) + 2 r^m sin²(mπp)` — same-signed terms that
+never cancel — with `1 − r^m = −expm1(m ln r)`, which stays exact as `r → 1`.
+Validated against brute-force additive synthesis at −225 dB, and against the
+original real-valued kernel at −217 dB.
+
+**The default path is untouched.** With `rotate: 0, tilt: 0` the original
+real-valued kernel runs, and all 13 deterministic regression renders are
+bit-for-bit identical to the pre-feature build.
+
 ### Phase in and out
 
 - `phase` is an offset in **cycles**, added to the running phase rather than
@@ -185,6 +254,10 @@ no output latency.
   alias — measured at −31 dBFS for PM with index 2 on a 220 Hz carrier at
   `maxfreq` 8000. Lower `maxfreq` when modulating hard. This is physics, not an
   implementation defect.
+- **`rotate` costs nothing spectrally.** It is a pure phase rotation, so it
+  cannot introduce aliasing or change loudness at any modulation rate.
+- **`tilt` does not relax the band limit.** `maxfreq` still applies on top of
+  it, so the output stays alias-free at any tilt, positive or negative.
 - **RMS normalisation peaks well above 1.** `normalize: 1` holds the RMS at
   0.707 for any bandwidth, which means the peak is `sqrt(W)` — 7.4 for a 54
   harmonic band. Scale accordingly. Peak normalisation (the default, and Blip's
@@ -202,8 +275,9 @@ At 48 kHz, per voice, one core:
 
 | | ns/sample | % of a core |
 |---|---|---|
-| control-rate `freq`/`minfreq`/`maxfreq` | 19.8 | 0.10% |
-| any of them at audio rate | 43.1 | 0.21% |
+| default kernel, control-rate band | 19.1 | 0.09% |
+| with `rotate` and/or `tilt` engaged | 31.8 | 0.15% |
+| `freq`/`minfreq`/`maxfreq`/`tilt` at audio rate | 43.1 | 0.21% |
 
 Independent of how many harmonics are in the band — 2 Hz with 10 000 harmonics
 costs the same as 2 kHz with 5.

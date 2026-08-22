@@ -93,17 +93,39 @@ inline double clip01(double x) { return x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x); }
 struct Band {
     double aFull; // lowest full-weight harmonic
     double bFull; // highest full-weight harmonic (bFull < aFull => empty)
+    double nFull; // bFull - aFull + 1, clamped at 0
     double loIdx; // index of the partial low-edge harmonic (0 => unused)
-    double loAmp; // its weight
+    double loAmp; // its weight, tilt included
     double hiIdx; // index of the partial high-edge harmonic
-    double hiAmp; // its weight
+    double hiAmp; // its weight, tilt included
     double norm;  // output scaling
+
+    // Exponential spectral tilt: harmonic k additionally carries r^(k-1), so
+    // the fundamental is always the 0 dB reference and the slope is a straight
+    // line in dB against linear frequency. r == 1 (plain) is the untilted
+    // brick-wall band and keeps the original real-valued code path.
+    bool plain;
+    double r;    // per-harmonic ratio
+    double rA;   // r^(aFull-1)
+    double rn;   // r^nFull
+    double omr;  // 1 - r,       via -expm1(ln r)
+    double omrn; // 1 - r^nFull, via -expm1(nFull * ln r)
 };
+
+// sum_{j=0}^{n-1} exp(j*lq). expm1 keeps this exact as lq -> 0, where the
+// series degenerates to n.
+inline double geomSum(double lq, double n) {
+    if (n <= 0.0)
+        return 0.0;
+    if (lq == 0.0)
+        return n;
+    return std::expm1(n * lq) / std::expm1(lq);
+}
 
 // nyq: highest permissible harmonic frequency (a hair under sr/2).
 // rms:  false -> peak-normalised (waveform peaks at 1, like Blip)
 //       true  -> RMS-normalised (roughly constant loudness across bandwidth)
-inline Band makeBand(double freq, double minfreq, double maxfreq, double nyq, bool rms) {
+inline Band makeBand(double freq, double minfreq, double maxfreq, double tilt, double nyq, bool rms) {
     const double af = std::fabs(freq);
     Band b;
 
@@ -139,8 +161,8 @@ inline Band makeBand(double freq, double minfreq, double maxfreq, double nyq, bo
     // Each partial edge harmonic carries BOTH window factors, so a band
     // narrower than one harmonic -- or an inverted one, minfreq above maxfreq --
     // degrades to the right answer instead of a spurious tone.
-    b.loAmp = loFrac * clip01(highN - lF + 1.0);
-    b.hiAmp = hiFrac * clip01(b.hiIdx - lowN + 1.0);
+    double loTrap = loFrac * clip01(highN - lF + 1.0);
+    double hiTrap = hiFrac * clip01(b.hiIdx - lowN + 1.0);
 
     // The interior harmonics are all at or below min(maxfreq, nyq) by
     // construction, but the fractional top edge sits one harmonic higher and
@@ -149,17 +171,39 @@ inline Band makeBand(double freq, double minfreq, double maxfreq, double nyq, bo
     // this UGen exists to avoid. Consequence worth knowing: keeping maxfreq at
     // least one harmonic below Nyquist is what buys the smooth top edge.
     if (b.hiIdx * af > nyq)
-        b.hiAmp = 0.0;
+        hiTrap = 0.0;
     if (b.loIdx * af > nyq)
-        b.loAmp = 0.0;
+        loTrap = 0.0;
 
-    double W = b.loAmp + b.hiAmp;
-    double W2 = b.loAmp * b.loAmp + b.hiAmp * b.hiAmp;
-    if (bF >= aF) {
-        const double n = bF - aF + 1.0;
-        W += n;
-        W2 += n;
+    b.nFull = bF >= aF ? (bF - aF + 1.0) : 0.0;
+
+    // tilt (dB per kHz) -> ln r. The span clamp keeps r^k inside double's
+    // exponent range for absurd settings; it bites well past +-1000 dB across
+    // the band, so it never touches a musical one.
+    double lnr = 0.0;
+    if (tilt != 0.0 && af > 0.0) {
+        lnr = tilt * af * (2.302585092994045684 / 20000.0);
+        const double span = std::fabs(lnr) * (bF + 1.0);
+        if (span > 300.0)
+            lnr *= 300.0 / span;
     }
+    b.plain = (lnr == 0.0);
+    b.r = std::exp(lnr);
+    b.rA = std::exp(lnr * (aF - 1.0));
+    b.rn = std::exp(lnr * b.nFull);
+    b.omr = -std::expm1(lnr);
+    b.omrn = -std::expm1(lnr * b.nFull);
+
+    b.loAmp = loTrap * std::exp(lnr * (b.loIdx - 1.0));
+    b.hiAmp = hiTrap * std::exp(lnr * (b.hiIdx - 1.0));
+
+    // Two sums are needed: the trapezoid alone decides whether the band is
+    // fading out (and the output with it), while the tilted one sets the level.
+    const double Wtrap = loTrap + hiTrap + b.nFull;
+    const double Wtrap2 = loTrap * loTrap + hiTrap * hiTrap + b.nFull;
+    const double W = b.loAmp + b.hiAmp + b.rA * geomSum(lnr, b.nFull);
+    const double W2 = b.loAmp * b.loAmp + b.hiAmp * b.hiAmp
+        + b.rA * b.rA * geomSum(2.0 * lnr, b.nFull);
 
     if (rms) {
         // sum w_k cos(...) has RMS sqrt(W2/2), so 1/sqrt(W2) puts the output at
@@ -167,12 +211,12 @@ inline Band makeBand(double freq, double minfreq, double maxfreq, double nyq, bo
         // is then sqrt(W2) and can be well above 1 -- that is the price of
         // constant loudness for an impulse train. Below W2 = 1 the band is
         // fading out and the scaling is left at unity so it can reach silence.
-        b.norm = W2 > 1.0 ? 1.0 / std::sqrt(W2) : 1.0;
+        b.norm = W2 > 0.0 ? std::min(1.0, std::sqrt(Wtrap2)) / std::sqrt(W2) : 1.0;
     } else {
         // Peak normalisation: y(0) = W/max(W,1). Dividing by max(W,1) rather
         // than W lets the last harmonic fade to silence instead of being
         // renormalised back up to full level.
-        b.norm = W > 1.0 ? 1.0 / W : 1.0;
+        b.norm = W > 0.0 ? std::min(1.0, Wtrap) / W : 1.0;
     }
     return b;
 }
@@ -180,6 +224,9 @@ inline Band makeBand(double freq, double minfreq, double maxfreq, double nyq, bo
 // ---------------------------------------------------------------------------
 // Waveform. p is phase in cycles; any real value is accepted.
 // ---------------------------------------------------------------------------
+
+// Untilted, unrotated: the original real-valued kernel, kept verbatim so the
+// default configuration stays bit-for-bit what it always was.
 inline double evalBand(const Band& b, double pIn) {
     // Reduce to [-0.5, 0.5) first. cos(2*pi*k*p) has period 1 and the closed
     // form is even in p, so this is exact -- and it is what keeps sincpi(p)
@@ -199,6 +246,68 @@ inline double evalBand(const Band& b, double pIn) {
         acc += b.hiAmp * cospi(2.0 * b.hiIdx * p);
 
     return acc * b.norm;
+}
+
+// ---------------------------------------------------------------------------
+// General case: exponential tilt and/or a constant phase rotation.
+//
+// With z = r*exp(i*2*pi*p), the whole weighted sum is one complex geometric
+// series, so tilt and rotation cost the same machinery:
+//
+//     S   = z^(A-1) * (1 - z^n) / (1 - z)  +  edge terms
+//     y   = Re( exp(i*2*pi*rot) * S ) * norm
+//
+// Rotating every harmonic by the SAME angle (not k*angle, which is just a time
+// shift) leaves the magnitude spectrum untouched and turns the symmetric
+// impulse into an asymmetric one: rot = 0.25 gives the Hilbert transform of it,
+// a sharp edge one side and a slow tail the other. Being magnitude-preserving,
+// it cannot alias.
+//
+// Both 1-z and 1-z^m are formed as (1 - r^m) + 2*r^m*sin^2(m*pi*p) so that the
+// two terms are same-signed for r <= 1 and never cancel. They vanish together
+// only at r == 1, p == 0, where the series is just n.
+// ---------------------------------------------------------------------------
+inline double evalBandRot(const Band& b, double pIn, double rotCos, double rotSin) {
+    const double p = pIn - std::floor(pIn + 0.5);
+    double sre = 0.0, sim = 0.0;
+
+    if (b.nFull > 0.0) {
+        const double s1 = sinpi(p);
+        const double dre = b.omr + 2.0 * b.r * s1 * s1;
+        const double dim = -b.r * sinpi(2.0 * p);
+        const double den = dre * dre + dim * dim;
+
+        double gre, gim;
+        if (den > 0.0) {
+            const double sn = sinpi(b.nFull * p);
+            const double nre = b.omrn + 2.0 * b.rn * sn * sn;
+            const double nim = -b.rn * sinpi(2.0 * b.nFull * p);
+            gre = (nre * dre + nim * dim) / den;
+            gim = (nim * dre - nre * dim) / den;
+        } else {
+            gre = b.nFull; // r == 1 and p == 0
+            gim = 0.0;
+        }
+
+        // Prefactor is r^-1 * z^A: magnitude r^(A-1), but phase 2*pi*A*p.
+        const double ea = 2.0 * b.aFull * p;
+        const double ca = cospi(ea), sa = sinpi(ea);
+        sre = b.rA * (ca * gre - sa * gim);
+        sim = b.rA * (ca * gim + sa * gre);
+    }
+
+    if (b.loAmp > 0.0) {
+        const double e = 2.0 * b.loIdx * p;
+        sre += b.loAmp * cospi(e);
+        sim += b.loAmp * sinpi(e);
+    }
+    if (b.hiAmp > 0.0) {
+        const double e = 2.0 * b.hiIdx * p;
+        sre += b.hiAmp * cospi(e);
+        sim += b.hiAmp * sinpi(e);
+    }
+
+    return (sre * rotCos - sim * rotSin) * b.norm;
 }
 
 // Wrap to [0, 1). The clamp matters: a double just under 1.0 rounds up to

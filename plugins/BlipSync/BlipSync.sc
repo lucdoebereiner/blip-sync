@@ -27,17 +27,32 @@ BlipSync : MultiOutUGen {
     // normalize  - 0: peak (waveform peaks at 1.0, like Blip)
     //              1: RMS  (roughly constant loudness as the band changes).
     //              INIT RATE.
+    // rotate    - constant phase rotation of every harmonic, in CYCLES.
+    //             0    = symmetric impulse (identical to before this existed)
+    //             0.25 = its Hilbert transform: sharp edge one side, slow tail
+    //                    the other -- an asymmetric impulse
+    //             0.5  = inverted impulse
+    //             The magnitude spectrum is untouched, so this cannot alias and
+    //             is safe at audio rate. Audible on impulsive material; much
+    //             less so on steady tones at high fundamentals.
+    // tilt      - exponential spectral tilt in dB per kHz, 0 = flat (default),
+    //             negative = darker. A straight line in dB against linear
+    //             frequency, referenced to the fundamental, applied UNDER the
+    //             maxfreq brick wall. Softens the pulse and removes the
+    //             brick-wall ringing.
     *ar { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
-          syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0|
+          syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
+          rotate = 0, tilt = 0|
         ^this.multiNew('audio', freq, maxfreq, minfreq, phase, sync,
-                       syncPhase, syncMode, iphase, normalize)
+                       syncPhase, syncMode, iphase, normalize, rotate, tilt)
     }
 
     // Convenience: just the waveform.
     *arSig { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
-              syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0, mul = 1, add = 0|
+              syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
+              rotate = 0, tilt = 0, mul = 1, add = 0|
         ^BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
-                     syncMode, iphase, normalize).at(0).madd(mul, add)
+                     syncMode, iphase, normalize, rotate, tilt).at(0).madd(mul, add)
     }
 
     init { |... theInputs|

@@ -32,12 +32,15 @@ enum {
     kSyncMode,  // init-rate: 0 = trigger, 1 = phase ramp
     kIPhase,    // init-rate
     kNormalize, // init-rate: 0 = peak, 1 = RMS
+    kRotate,
+    kTilt,
     kNumInputs
 };
 
 struct BlipSync : public Unit {
     double m_phase;
     double m_freq, m_maxfreq, m_minfreq, m_phaseoff, m_syncphase;
+    double m_rotate, m_tilt;
     double m_syncPrev;
     double m_blep0, m_blep1;
     double m_nyq, m_sampleDur;
@@ -94,6 +97,8 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
     Ramp mn = makeRamp(unit, kMinFreq, inNumSamples, unit->m_minfreq);
     Ramp po = makeRamp(unit, kPhase, inNumSamples, unit->m_phaseoff);
     Ramp sp = makeRamp(unit, kSyncPhase, inNumSamples, unit->m_syncphase);
+    Ramp ro = makeRamp(unit, kRotate, inNumSamples, unit->m_rotate);
+    Ramp tl = makeRamp(unit, kTilt, inNumSamples, unit->m_tilt);
 
     // The sync input is never ramped: smearing it across the block would move
     // the edge. A control-rate sync signal simply holds for the whole block,
@@ -103,7 +108,8 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
 
     // The band description only has to be rebuilt when one of the three
     // frequencies actually moves; holding it still costs ~2/3 of the CPU.
-    const bool staticBand = unit->m_bandValid && fr.constant() && mx.constant() && mn.constant();
+    const bool staticBand =
+        unit->m_bandValid && fr.constant() && mx.constant() && mn.constant() && tl.constant();
 
     blipsync::Band band = unit->m_band;
     const double nyq = unit->m_nyq;
@@ -123,9 +129,24 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         const double poff = po.next();
         const double sval = syncBuf ? (double)syncBuf[i] : syncK;
         const double starget = sp.next();
+        const double rot = ro.next();
+        const double tilt = tl.next();
 
         if (!staticBand)
-            band = blipsync::makeBand(freq, minf, maxf, nyq, rms);
+            band = blipsync::makeBand(freq, minf, maxf, tilt, nyq, rms);
+
+        // With neither tilt nor rotation the original real-valued kernel runs,
+        // so the default configuration is bit-for-bit unchanged.
+        double rotCos = 1.0, rotSin = 0.0;
+        bool plain = band.plain;
+        if (rot != 0.0) {
+            plain = false;
+            rotCos = blipsync::cospi(2.0 * rot);
+            rotSin = blipsync::sinpi(2.0 * rot);
+        }
+        const auto ev = [&](double q) {
+            return plain ? blipsync::evalBand(band, q) : blipsync::evalBandRot(band, q, rotCos, rotSin);
+        };
 
         const double inc = freq * sampleDur;
 
@@ -153,15 +174,15 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         if (d > 1.0) d = 1.0;
 
         const double ph = phase + poff;
-        double y = blipsync::evalBand(band, ph);
+        double y = ev(ph);
 
         if (fired) {
             // The crossing was found between the previous sample and this one,
             // but the correction can only be scheduled into [i, i+1) -- hard
             // sync therefore lands one sample after the edge. Step amplitude is
             // measured between the two trajectories at the crossing instant.
-            const double before = blipsync::evalBand(band, phase + d * inc + poff);
-            const double after = blipsync::evalBand(band, starget + poff);
+            const double before = ev(phase + d * inc + poff);
+            const double after = ev(starget + poff);
             const double D = after - before;
             blep0 += D * (1.0 - d) * (1.0 - d) * 0.5;
             blep1 += -D * d * d * 0.5;
@@ -213,6 +234,8 @@ void BlipSync_Ctor(BlipSync* unit) {
     unit->m_phaseoff = (double)IN0(kPhase);
     unit->m_syncphase = (double)IN0(kSyncPhase);
     unit->m_syncPrev = (double)IN0(kSync);
+    unit->m_rotate = (double)IN0(kRotate);
+    unit->m_tilt = (double)IN0(kTilt);
     unit->m_blep0 = 0.0;
     unit->m_blep1 = 0.0;
     unit->m_bandValid = false;

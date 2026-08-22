@@ -166,7 +166,7 @@ int main() {
             b.next(buf.data(), BS, (float)freqReq, (int)nh);
             for (int j = 0; j < BS; ++j) blip[i + j] = buf[j];
         }
-        blipsync::Band bd = blipsync::makeBand(fEff, 0.0, nh * fEff, nyq, false);
+        blipsync::Band bd = blipsync::makeBand(fEff, 0.0, nh * fEff, 0.0, nyq, false);
         double p = 0.0, inc = fEff / sr;
         for (int i = 0; i < n; ++i) {
             mine[i] = blipsync::evalBand(bd, p);
@@ -202,7 +202,7 @@ int main() {
         for (int i = 0; i < n; ++i) {
             double t = (double)i / (double)n;
             double mx = (5.0 + 55.0 * t) * fEff;
-            blipsync::Band bd = blipsync::makeBand(fEff, 0.0, mx, nyq, false);
+            blipsync::Band bd = blipsync::makeBand(fEff, 0.0, mx, 0.0, nyq, false);
             mine[i] = blipsync::evalBand(bd, p);
             p += fEff / sr; p -= std::floor(p);
         }
@@ -229,7 +229,7 @@ int main() {
         for (int i = 0; i < n; ++i) {
             double t = (double)i / (double)n;
             double f = 100.0 * pow(8.0, t);
-            blipsync::Band bd = blipsync::makeBand(f, 0.0, top, nyq, false);
+            blipsync::Band bd = blipsync::makeBand(f, 0.0, top, 0.0, nyq, false);
             mine[i] = blipsync::evalBand(bd, p);
             p += f / sr; p -= std::floor(p);
         }
@@ -251,7 +251,7 @@ int main() {
         }
         for (int i = 0; i < n; ++i) {
             double f = fc + dev * sin(2.0 * M_PI * fm * (double)i / sr);
-            blipsync::Band bd = blipsync::makeBand(f, 0.0, 20.0 * f, nyq, false);
+            blipsync::Band bd = blipsync::makeBand(f, 0.0, 20.0 * f, 0.0, nyq, false);
             mine[i] = blipsync::evalBand(bd, p);
             p += f / sr; p -= std::floor(p);
         }
@@ -266,7 +266,7 @@ int main() {
         const int n = 512 * 1024;
         const double fosc = 800.0, fsync = 48000.0 / 512.0, mx = 8000.0;
         std::vector<double> naive(n), blep(n);
-        blipsync::Band bd = blipsync::makeBand(fosc, 0.0, mx, nyq, false);
+        blipsync::Band bd = blipsync::makeBand(fosc, 0.0, mx, 0.0, nyq, false);
         const double inc = fosc / sr, incs = fsync / sr;
 
         {   // naive: instantaneous reset on the sample after the crossing

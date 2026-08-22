@@ -16,6 +16,9 @@ instead of switching on or off, so sweeping any parameter produces no stepping,
 no crossfade transient and no zipper noise.
 ## Every input is read STRONG::per sample::, so audio-rate FM and PM behave
 correctly. Blip samples its frequency input once per control block.
+## Two timbral controls that keep the alias-free guarantee: a STRONG::phase
+rotation:: that makes the impulse asymmetric without touching the magnitude
+spectrum, and an exponential STRONG::spectral tilt:: that softens it.
 ## Phase is both an STRONG::input and an output::, and there is a sub-sample
 accurate hard sync input with polyBLEP step correction.
 ::
@@ -87,6 +90,45 @@ INIT RATE. code::0:: -- peak normalisation, the waveform peaks at 1.0 like Blip;
 narrow bands are therefore quiet. code::1:: -- RMS normalisation, roughly
 constant loudness as the band width changes, which is usually what you want when
 sweeping STRONG::maxfreq::. Default 0.
+
+ARGUMENT:: rotate
+Constant phase rotation applied to every harmonic, in CYCLES. Not the same as
+STRONG::phase::, which rotates harmonic k by k times the angle and is therefore
+only a time shift; this rotates them all by the SAME angle, which makes the
+impulse asymmetric.
+
+LIST::
+## code::0:: -- symmetric impulse (identical to the UGen before this existed)
+## code::0.125:: -- leaning
+## code::0.25:: -- the Hilbert transform of the impulse: sharp edge one side,
+slow tail the other
+## code::0.5:: -- inverted impulse
+::
+
+The magnitude spectrum is unchanged, so this cannot alias and is safe at audio
+rate -- unlike phase modulation, the modulation index does not scale with the
+harmonic number. RMS is exactly invariant too: rotating changes the crest factor,
+not the loudness. In peak-normalised mode the waveform peak falls to about 0.73
+at code::0.25::, which is headroom rather than a level drop.
+
+Most audible on impulsive material -- low fundamentals where every period reads
+as a separate event. Much less so on steady tones at high fundamentals. Default 0.
+
+ARGUMENT:: tilt
+Exponential spectral tilt in dB per kHz, referenced to the fundamental. 0 (the
+default) is the flat, brick-wall band; negative values roll the harmonics off
+and give a smooth, ring-free pulse rather than a sinc-like one. Positive values
+tilt upward.
+
+It is a straight line in dB against LINEAR frequency (the harmonic weights form
+a geometric series, which is what keeps the closed form), and it applies
+UNDERNEATH the STRONG::maxfreq:: brick wall, so the output stays alias-free at
+any tilt. Like everything else here it is specified in Hz terms, so the slope
+stays put when the pitch moves.
+
+Useful range is roughly 0 to -12 dB/kHz. Worth reaching for when there is
+saturation downstream: a brick-wall impulse train is very peaky, so a waveshaper
+mostly flattens its tip; a tilted pulse is wider and distorts far more evenly.
 
 METHOD:: arSig
 As code::ar::, but returns only the waveform channel and accepts
@@ -175,7 +217,44 @@ s.boot;
 }.play
 )
 
-// 8. an oscillator bank with spread initial phases
+// 8. rotate: asymmetric impulses. Sweep it and listen to the attack flip.
+(
+{
+    var r = MouseX.kr(0, 1);
+    BlipSync.ar(60, 6000, rotate: r).at(0) * 0.2 ! 2
+}.play
+)
+
+// 9. rotate through a waveshaper -- the crest factor change is the point
+(
+{
+    var r = SinOsc.kr(0.1).range(0, 0.5);
+    var sig = BlipSync.ar(40, 9000, rotate: r).at(0);
+    (RLPF.ar(sig, 1200, 0.3) * 20).tanh * 0.15 ! 2
+}.play
+)
+
+// 10. tilt: brick wall vs smooth rolloff, same band limit
+(
+{
+    var t = MouseY.kr(0, -12);
+    BlipSync.ar(80, 12000, tilt: t).at(0) * 0.2 ! 2
+}.play
+)
+
+// 11. both, in a pulsar-ish texture
+(
+{
+    var n = 24;
+    var f = Array.exprand(n, 4, 40);
+    var pulses = BlipSync.ar(f, Array.exprand(n, 4000, 16000),
+        rotate: Array.rand(n, 0, 1), tilt: Array.rand(n, -6.0, 0.0)).collect(_.at(0));
+    var filt = RLPF.ar(pulses, Array.exprand(n, 200, 6000), Array.rand(n, 0.02, 0.4));
+    Splay.ar((filt * 12).tanh) * 0.3
+}.play
+)
+
+// 12. an oscillator bank with spread initial phases
 (
 {
     var n = 8;
@@ -208,7 +287,10 @@ modulating hard.
 sqrt(W) -- about 7.4 for a 54-harmonic band. Scale accordingly.
 ## code::ar:: has no mul/add because it returns two channels and madd would scale
 the phase output too. Use code::.at(0) * amp:: or link::#*arSig::.
-## CPU is about 0.10% of one core per voice with control-rate parameters, 0.21%
-when freq, minfreq or maxfreq is audio rate -- independent of how many harmonics
-the band contains.
+## code::rotate:: is a pure phase rotation, so it cannot introduce aliasing or
+change loudness at any modulation rate, and code::tilt:: does not relax the
+STRONG::maxfreq:: band limit.
+## CPU is about 0.09% of one core per voice with control-rate parameters, 0.15%
+with rotate or tilt engaged, 0.21% when freq, minfreq, maxfreq or tilt is audio
+rate -- independent of how many harmonics the band contains.
 ::
