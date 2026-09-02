@@ -236,6 +236,56 @@ s.boot;
 }.play
 )
 
+// 6b. a full Kuramoto bank of n oscillators, all-to-all.
+//     The pairwise sum (1/n)*sum_j sin(2pi(th_j - th_i)) is exactly
+//     S*cos(2pi th_i) - C*sin(2pi th_i) with C, S the mean of cos and sin
+//     over all phases -- so the mean field costs O(n) UGens, not O(n^2).
+//     n=16: 229 UGens instead of 905, and the result is identical.
+//     Raise k past the spread of the natural frequencies and the bank locks.
+(
+{
+    var n = 8, k = MouseY.kr(0, 80);
+    var base = Array.fill(n, { |i| 90 + (i * 4.3) });
+    var ph = LocalIn.ar(n);
+    var c = Mix(cos(2pi * ph)) / n, s = Mix(sin(2pi * ph)) / n;
+    var osc = Array.fill(n, { |i|
+        var field = (s * cos(2pi * ph[i])) - (c * sin(2pi * ph[i]));
+        BlipSync.ar(base[i] + (k * field), 6000, tilt: -2)
+    });
+    LocalOut.ar(osc.collect(_.at(1)));
+    Splay.ar(osc.collect(_.at(0))) * 0.15
+}.play
+)
+
+// 6c. same bank, but pulled toward an external master phase as well
+//     (this is the PLL form: correct towards a reference ramp)
+(
+{
+    var n = 8, k = 30, m = MouseY.kr(0, 60);
+    var base = Array.fill(n, { |i| 90 + (i * 4.3) });
+    var master = Phasor.ar(0, 100 * SampleDur.ir, 0, 1);
+    var ph = LocalIn.ar(n);
+    var c = Mix(cos(2pi * ph)) / n, s = Mix(sin(2pi * ph)) / n;
+    var osc = Array.fill(n, { |i|
+        var field = (s * cos(2pi * ph[i])) - (c * sin(2pi * ph[i]));
+        var lock  = sin(2pi * (master - ph[i]));
+        BlipSync.ar(base[i] + (k * field) + (m * lock), 6000, tilt: -2)
+    });
+    LocalOut.ar(osc.collect(_.at(1)));
+    Splay.ar(osc.collect(_.at(0))) * 0.15
+}.play
+)
+
+// 6d. driven from an external phase bank instead: any UGen that emits 0..1
+//     ramps (a PLL, a Phasor bank, phases read from a buffer) becomes the
+//     clock, and track: 1 lets the band follow whatever rate it runs at
+(
+{
+    var ph = Array.fill(4, { |i| Phasor.ar(0, (97 + (i * 5)) * SampleDur.ir, 0, 1) });
+    Splay.ar(ph.collect { |p| BlipSync.ar(0, 6000, phase: p, track: 1, tilt: -2).at(0) }) * 0.2
+}.play
+)
+
 // 7. phase offset as an audio-rate input = phase modulation
 (
 {

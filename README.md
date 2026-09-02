@@ -240,6 +240,40 @@ infinitely narrow impulse, so it goes quiet rather than freezing on a value.
 Tracking is off by default and init-rate, so nothing about the existing
 behaviour changes.
 
+### Phase networks: Kuramoto, PLL
+
+Both live outside this UGen, and that is deliberate — a coupling network is one
+object shared by *n* oscillators, not something each oscillator owns. Neither
+needs new code.
+
+**Kuramoto** is frequency coupling, `dθᵢ/dt = ωᵢ + (K/N)·Σⱼ sin(θⱼ − θᵢ)`, so it
+goes straight into the `freq` input with the phase outputs fed back through
+`LocalIn`/`LocalOut`. The pairwise sum is worth rewriting: it equals
+`S·cos(2πθᵢ) − C·sin(2πθᵢ)` where `C`, `S` are the means of `cos` and `sin` over
+all phases — the order parameter. That is O(*n*) instead of O(*n*²), 229 UGens
+instead of 905 for *n* = 16, and numerically identical (measured: R agrees to
+four decimals at K = 20 and K = 80). Measured locking transition for four
+oscillators at 89–111 Hz:
+
+| K (Hz) | 0 | 4 | 10 | 20 | 40 | 80 |
+|---|---|---|---|---|---|---|
+| order parameter R | 0.44 | 0.38 | 0.39 | 0.88 | 0.98 | 0.995 |
+
+Stable and alias-free throughout; the one block of `LocalIn` latency only starts
+to matter when K approaches the block rate.
+
+**PLL** corrects the phase itself rather than the frequency, which needs a phase
+*source* — a UGen emitting 0..1 ramps. Feed those to `phase` with `freq: 0` and
+`track: 1`. Measured with a four-slave master-lock PLL against a 100 Hz master:
+
+| correction factor | 0.0002 | 0.001 | 0.005 | 0.02 |
+|---|---|---|---|---|
+| order parameter R | 0.36 | 0.53 | 0.98 | 0.999 |
+
+The difference in feel is the difference between the two: Kuramoto integrates
+the pull, so it bends pitch and locks softly; a PLL displaces the phase
+directly, so it locks harder and can pull discontinuously.
+
 ### Hard sync
 
 `sync` accepts either a trigger (mode 0) or a 0..1 phase ramp (mode 1). Mode 1
