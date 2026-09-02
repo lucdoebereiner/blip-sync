@@ -262,6 +262,39 @@ oscillators at 89–111 Hz:
 Stable and alias-free throughout; the one block of `LocalIn` latency only starts
 to matter when K approaches the block rate.
 
+**Hierarchy** is the same trick once per level, summed. Compute a mean field per
+group and a mean field over the groups; each oscillator feels
+`K_in·(group field) + K_out·(global field)`. Four groups of four, groups centred
+at 96/104/116/132 Hz:
+
+| K_in | K_out | R within a group | R between groups |
+|---|---|---|---|
+| 0 | 0 | 0.39 | 0.46 |
+| 40 | 0 | **0.998** | **0.46** |
+| 40 | 10 | 0.998 | 0.44 |
+| 40 | 40 | 1.000 | 0.93 |
+| 40 | 120 | 1.000 | 0.99 |
+
+The second row is the interesting one: each group is a single coherent pulse
+while the four groups drift freely against each other. Raising `K_out` fuses
+them. It nests to any depth — one field per level, one term per level in the sum
+— and stays O(*n*).
+
+For a level above that runs *slower*, use a ratio lock:
+`sin(2π(ratio·masterPhase − θᵢ))` holds `ratio` pulses per conductor cycle.
+Groups at 2:3:4:5 against a 25 Hz conductor, deliberately detuned by +3/−4/+5/−2
+Hz so the lock has to work for it:
+
+| K_lock (Hz) | ×2 | ×3 | ×4 | ×5 | group frequency error |
+|---|---|---|---|---|---|
+| 0 | 0.02 | 0.02 | 0.00 | 0.03 | +3.00 −4.00 +5.00 −2.00 Hz |
+| 3 | 1.000 | 0.45 | 0.35 | 1.000 | 0.00 −2.65 +3.96 0.00 Hz |
+| 8 | 1.000 | 1.000 | 1.000 | 1.000 | 0.00 0.00 0.00 0.00 Hz |
+
+Textbook capture: each group locks once the coupling exceeds its detuning, and
+the K=3 row catches two groups in and two out. Alias floor stays below
+−127 dBFS everywhere in both tables.
+
 **PLL** corrects the phase itself rather than the frequency, which needs a phase
 *source* — a UGen emitting 0..1 ramps. Feed those to `phase` with `freq: 0` and
 `track: 1`. Measured with a four-slave master-lock PLL against a 100 Hz master:

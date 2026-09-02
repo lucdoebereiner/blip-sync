@@ -276,6 +276,56 @@ s.boot;
 }.play
 )
 
+// 6e. HIERARCHY: groups that lock tightly among themselves, and only loosely
+//     to the whole. One mean field per level, summed -- still O(n).
+//     Pull kout up and the groups fuse; leave it near 0 and each group is its
+//     own coherent pulse drifting against the others.
+(
+{
+    var g = 4, m = 4, n = 16, kin = 40, kout = MouseY.kr(0, 120);
+    var base = Array.fill(n, { |i| [96, 104, 116, 132][i.div(m)] + ((i % m) * 2.1) - 3.15 });
+    var ph = LocalIn.ar(n);
+    var cs = cos(2pi * ph), sn = sin(2pi * ph);
+    var gc = Array.fill(g, { |q| Mix(cs[(q*m)..(q*m+m-1)]) / m });   // group fields
+    var gs = Array.fill(g, { |q| Mix(sn[(q*m)..(q*m+m-1)]) / m });
+    var mc = Mix(gc) / g, ms = Mix(gs) / g;                          // field of fields
+    var osc = Array.fill(n, { |i|
+        var q = i.div(m);
+        var fin  = (gs[q] * cs[i]) - (gc[q] * sn[i]);   // toward own group
+        var fout = (ms    * cs[i]) - (mc    * sn[i]);   // toward all groups
+        BlipSync.ar(base[i] + (kin * fin) + (kout * fout), 6000, tilt: -2)
+    });
+    LocalOut.ar(osc.collect(_.at(1)));
+    Splay.ar(osc.collect(_.at(0))) * 0.1
+}.play
+)
+
+// 6f. the level above running SLOWER, with the groups locked to it in whole
+//     ratios. sin(2pi(ratio*master - theta)) is a ratio lock: group q holds
+//     ratio[q] pulses per conductor cycle. Capture happens once klock exceeds
+//     the detuning, so mouse up from silence-of-lock into 2:3:4:5.
+(
+{
+    var g = 4, m = 4, n = 16, cf = 25, kin = 40, klock = MouseY.kr(0, 20);
+    var ratio = [2, 3, 4, 5], off = [3, -4, 5, -2];     // groups deliberately off-ratio
+    var base = Array.fill(n, { |i|
+        (cf * ratio[i.div(m)]) + off[i.div(m)] + ((i % m) * 1.3) - 1.95 });
+    var master = Phasor.ar(0, cf * SampleDur.ir, 0, 1);
+    var ph = LocalIn.ar(n);
+    var cs = cos(2pi * ph), sn = sin(2pi * ph);
+    var gc = Array.fill(g, { |q| Mix(cs[(q*m)..(q*m+m-1)]) / m });
+    var gs = Array.fill(g, { |q| Mix(sn[(q*m)..(q*m+m-1)]) / m });
+    var osc = Array.fill(n, { |i|
+        var q = i.div(m);
+        var fin  = (gs[q] * cs[i]) - (gc[q] * sn[i]);
+        var lock = sin(2pi * ((ratio[q] * master) - ph[i]));
+        BlipSync.ar(base[i] + (kin * fin) + (klock * lock), 6000, tilt: -2)
+    });
+    LocalOut.ar(osc.collect(_.at(1)));
+    Splay.ar(osc.collect(_.at(0))) * 0.1
+}.play
+)
+
 // 6d. driven from an external phase bank instead: any UGen that emits 0..1
 //     ramps (a PLL, a Phasor bank, phases read from a buffer) becomes the
 //     clock, and track: 1 lets the band follow whatever rate it runs at
