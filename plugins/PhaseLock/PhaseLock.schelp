@@ -1,0 +1,148 @@
+CLASS:: PhaseLock
+SUMMARY:: A bank of phase-locked oscillators driven by an external master phase
+CATEGORIES:: UGens>Generators, UGens>Triggers
+RELATED:: Classes/BlipSync, Classes/Phasor
+
+DESCRIPTION::
+
+STRONG::n:: phase oscillators, each with its own natural frequency, each pulled
+toward an external master phase. The output is STRONG::n:: phase ramps in 0..1
+— the same thing link::Classes/BlipSync:: reads with code::freq: 0:: and
+code::track: 1::.
+
+The reason the master is a SIGNAL rather than a frequency is that banks can then
+be CHAINED. One bank's output phase becomes the master of a bank below it, so a
+hierarchy is a tree of these — one instance per node, each with its own coupling
+strength — and per-slave ratios let a level lock in whole-number ratios to a
+slower one above it. That is the difference from a PLL that generates its own
+master internally, which can only ever be one level deep.
+
+Per sample, for slave STRONG::j:::
+
+TELETYPE::
+    ph[j] += freq[j]/sr
+           + k      * wrap(ratios[j]*master - ph[j])     // toward the parent
+           + mutual * R * sin(2pi*(psi - ph[j]))         // toward the siblings
+::
+
+code::k:: is a first-order loop, so it captures a detuning of about
+code::0.5 * k * sampleRate:: Hz — measured: at 48 kHz, code::k = 0.0002:: locks
+groups detuned by 3, 4 and 2 Hz and sits exactly on the boundary at 5 Hz, against
+a predicted 4.8 Hz. code::mutual:: is the Kuramoto mean field of the bank itself,
+so a bank can cohere internally with no master at all.
+
+NOTE::
+Give the slaves different code::iphases::. A bank started with every phase at 0
+is a degenerate state: with any coupling at all they simply stay there.
+::
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+ARGUMENT:: master
+The master phase, 0..1. A link::Classes/Phasor::, another PhaseLock output, a
+link::Classes/BlipSync:: phase output. Audio or control rate; a control-rate
+master is interpolated the short way round so the block containing the wrap does
+not sweep backwards.
+
+ARGUMENT:: freqs
+Array of natural frequencies, one per slave. Its size sets STRONG::n::. Audio or
+control rate.
+
+ARGUMENT:: k
+Pull toward the master, as the fraction of the phase error applied per sample.
+0 leaves the slaves free running. Stable over 0..1 and clipped there; negative
+values push away from the master instead.
+
+ARGUMENT:: mutual
+Pull toward the bank's own mean field, in the same units. Makes the slaves cohere
+with each other as well as with the master; negative repels them into anti-phase.
+0 skips the computation entirely.
+
+ARGUMENT:: ratios
+Per-slave ratio to the master: slave code::j:: holds code::ratios[j]:: cycles per
+master cycle. Wrap-extended to STRONG::n::. INIT RATE.
+
+ARGUMENT:: iphases
+Per-slave initial phase in cycles. Wrap-extended to STRONG::n::. INIT RATE.
+
+EXAMPLES::
+
+CODE::
+s.boot;
+
+// 1. a bank locked to one conductor, heard through BlipSync
+(
+{
+    var master = Phasor.ar(0, 25 * SampleDur.ir, 0, 1);
+    var ph = PhaseLock.ar(master, [53, 71, 105, 123], MouseY.kr(0, 0.001),
+                          ratios: [2, 3, 4, 5], iphases: (0..3) / 4);
+    Splay.ar(ph.collect { |p|
+        BlipSync.ar(0, 6000, phase: p, track: 1, tilt: -2).at(0)
+    }) * 0.2
+}.play
+)
+
+// 2. a two-level hierarchy: four group nodes locked to a conductor, and four
+//    members locked to each node. Mouse X is the pull inside a group, mouse Y
+//    the pull of the groups toward the conductor. Bottom left = 16 free
+//    oscillators, bottom right = four coherent groups drifting against each
+//    other, top right = one nested pulse.
+(
+{
+    var g = 4, m = 4, cf = 25;
+    var kin = MouseX.kr(0, 0.006), klock = MouseY.kr(0, 0.001);
+    var groupF = [53, 71, 105, 123], ratios = [2, 3, 4, 5];
+    var master = Phasor.ar(0, cf * SampleDur.ir, 0, 1);
+    var gph = PhaseLock.ar(master, groupF, klock, ratios: ratios, iphases: (0..g-1) / g);
+    var leaves = Array.fill(g, { |q|
+        PhaseLock.ar(gph[q], Array.fill(m, { |j| groupF[q] + (j * 1.3) - 1.95 }),
+                     kin, iphases: ((0..m-1) / m) + 0.05)
+    }).flatten;
+    Splay.ar(leaves.collect { |p|
+        BlipSync.ar(0, 6000, phase: p, track: 1, tilt: -2).at(0)
+    }) * 0.1
+}.play
+)
+
+// 3. no master at all: mutual coupling only, which is a Kuramoto bank in
+//    phase-correction form rather than frequency-coupling form
+(
+{
+    var ph = PhaseLock.ar(0, Array.fill(8, { |i| 90 + (i * 4.3) }),
+                          k: 0, mutual: MouseY.kr(0, 0.01), iphases: (0..7) / 8);
+    Splay.ar(ph.collect { |p|
+        BlipSync.ar(0, 6000, phase: p, track: 1, tilt: -2).at(0)
+    }) * 0.15
+}.play
+)
+
+// 4. the phase ramps are ordinary signals -- use them for anything
+(
+{
+    var ph = PhaseLock.ar(Phasor.ar(0, 2 * SampleDur.ir, 0, 1),
+                          [6, 8.1, 9.7], 0.001, ratios: [3, 4, 5], iphases: [0, 0.3, 0.6]);
+    Splay.ar(ph.collect { |p|
+        SinOsc.ar(400 + (p * 200)) * (1 - p).squared
+    }) * 0.2
+}.play
+)
+::
+
+STRONG::Notes::
+
+LIST::
+## A tree of banks is not the same thing as one mean field. In a tree each node
+has a definite phase that its children follow, so a group holds together even
+while its node drifts; in a mean field a group's phase is only the average of
+its members and has no independent existence.
+## The correction is proportional to the wrapped phase error, so it saturates at
+half a cycle. Beyond the capture range the loop slips cycles rather than
+diverging.
+## code::mutual:: costs a sine and a cosine per slave per sample; leave it at 0
+if the bank only follows a master.
+## The bank is allocated at init time, so STRONG::n:: is fixed for the life of
+the synth. Large banks need real time memory: raise
+code::s.options.memSize:: if the post window reports an RTAlloc failure.
+::

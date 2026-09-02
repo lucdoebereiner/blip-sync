@@ -66,15 +66,20 @@ endif()
 add_library(BlipSync MODULE plugins/BlipSync/BlipSync.cpp)
 set_target_properties(BlipSync PROPERTIES PREFIX "" SUFFIX ${PLUGIN_EXTENSION})
 
+add_library(PhaseLock MODULE plugins/PhaseLock/PhaseLock.cpp)
+set_target_properties(PhaseLock PROPERTIES PREFIX "" SUFFIX ${PLUGIN_EXTENSION})
+
 if(SUPERNOVA)
     add_library(BlipSync_supernova MODULE plugins/BlipSync/BlipSync.cpp)
     target_compile_definitions(BlipSync_supernova PRIVATE SUPERNOVA)
     set_target_properties(BlipSync_supernova PROPERTIES PREFIX "" SUFFIX ${PLUGIN_EXTENSION})
 endif()
 
-install(TARGETS BlipSync LIBRARY DESTINATION ${INSTALL_PATH})
-install(FILES plugins/BlipSync/BlipSync.sc DESTINATION ${INSTALL_PATH}/Classes)
-install(FILES plugins/BlipSync/BlipSync.schelp DESTINATION ${INSTALL_PATH}/HelpSource/Classes)
+install(TARGETS BlipSync PhaseLock LIBRARY DESTINATION ${INSTALL_PATH})
+install(FILES plugins/BlipSync/BlipSync.sc plugins/PhaseLock/PhaseLock.sc
+        DESTINATION ${INSTALL_PATH}/Classes)
+install(FILES plugins/BlipSync/BlipSync.schelp plugins/PhaseLock/PhaseLock.schelp
+        DESTINATION ${INSTALL_PATH}/HelpSource/Classes)
 if(SUPERNOVA)
     install(TARGETS BlipSync_supernova LIBRARY DESTINATION ${INSTALL_PATH})
 endif()

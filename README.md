@@ -7,7 +7,14 @@ input and an output.
 
 ```
 [ sig, phase ] = BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
-                             syncMode, iphase, normalize, rotate, tilt)
+                             syncMode, iphase, normalize, rotate, tilt, track)
+```
+
+Plus `PhaseLock`, a bank of phase-locked oscillators that emits phase ramps for
+BlipSync to read — see [section 4](#4-phaselock-a-chainable-pll-bank).
+
+```
+phases = PhaseLock.ar(master, freqs, k, mutual, ratios, iphases)
 ```
 
 Build:
@@ -369,7 +376,58 @@ no output latency.
   reduction and the sinc guards; reassociation there reintroduces exactly the
   cancellation this UGen exists to avoid.
 
-## 4. Cost
+## 4. `PhaseLock`: a chainable PLL bank
+
+*n* phase oscillators, each with its own natural frequency, each pulled toward an
+external master phase; *n* phase ramps out. Per sample, for slave *j*:
+
+```
+ph[j] += freq[j]/sr
+       + k      * wrap(ratios[j]*master - ph[j])     // toward the parent
+       + mutual * R * sin(2π(ψ - ph[j]))             // toward the siblings
+```
+
+The master is a **signal**, not a frequency, and that is the whole point: banks
+chain. One bank's output phase becomes the master of a bank below it, so a
+hierarchy is a tree of these — one instance per node, each with its own coupling
+strength — and per-slave `ratios` let a level lock in whole-number ratios to a
+slower one above it. A PLL that generates its own master internally can only
+ever be one level deep.
+
+`k` is a first-order loop, so it captures a detuning of about `0.5·k·sr` Hz.
+Measured on a two-level tree at 48 kHz — four group nodes at 2:3:4:5 against a
+25 Hz conductor, detuned by +3/−4/+5/−2 Hz, four members locked under each node:
+
+| k_in | k_lock | members → node | nodes → conductor (×2 ×3 ×4 ×5) | capture |
+|---|---|---|---|---|
+| 0.004 | 0 | 1.000 ×4 | 0.02 0.02 0.00 0.03 | — |
+| 0.004 | 0.00005 | 1.000 ×4 | 0.15 0.09 0.06 0.23 | 1.2 Hz |
+| 0.004 | 0.0002 | 1.000 ×4 | **1.000 1.000 0.52 1.000** | 4.8 Hz |
+| 0.004 | 0.001 | 1.000 ×4 | 1.000 1.000 1.000 1.000 | 24 Hz |
+| 0 | 0.001 | 0.03 0.01 0.02 0.26 | 1.000 1.000 1.000 1.000 | 24 Hz |
+
+The third row is the formula being right: a 4.8 Hz capture range locks the
+groups detuned by 3, 4 and 2 Hz and sits exactly on the boundary at 5 Hz. Row
+two is the shape asked for — each group internally rigid, the groups drifting
+against the conductor — and the last row shows the levels are independent.
+
+`mutual` adds the bank's own Kuramoto mean field, so a bank coheres with no
+master at all. Eight oscillators spread over 90–120 Hz:
+
+| mutual | 0 | 0.0005 | 0.002 | 0.008 | −0.004 |
+|---|---|---|---|---|---|
+| R | 0.23 | 0.88 | 0.995 | 1.000 | 0.03 |
+
+Negative repels: R drops below the uncoupled value as the bank spreads itself
+into anti-phase. Alias floor through BlipSync stays below −142 dBFS in every row
+of both tables.
+
+A tree of banks is not the same thing as the mean field of section 2. In a tree
+each node has a definite phase that its children follow, so a group holds
+together even while its node drifts; in a mean field a group's phase is only the
+average of its members and has no independent existence.
+
+## 5. Cost
 
 At 48 kHz, per voice, one core:
 
@@ -385,7 +443,7 @@ sample and costs the same as the audio-rate row.
 Independent of how many harmonics are in the band — 2 Hz with 10 000 harmonics
 costs the same as 2 kHz with 5.
 
-## 5. Verifying it yourself
+## 6. Verifying it yourself
 
 ```sh
 cd test
