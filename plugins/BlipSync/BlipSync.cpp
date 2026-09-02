@@ -34,20 +34,41 @@ enum {
     kNormalize, // init-rate: 0 = peak, 1 = RMS
     kRotate,
     kTilt,
+    kTrack, // init-rate: 0 = band width from freq, 1 = from total phase velocity
     kNumInputs
 };
+
+// Numerical guard only, never a musical limit: with the phase frozen the model
+// asks for an infinitely narrow impulse, i.e. an unbounded harmonic count. This
+// caps it far above anything audible (a 65536-harmonic pulse is one sample wide
+// at any sane rate) so the closed form stays well conditioned instead of
+// producing inf/NaN.
+static constexpr double kMaxHarm = 65536.0;
+
+// Phase arrives over a float32 bus, so differencing it toggles by one LSB from
+// sample to sample -- differentiation turns quantisation into high-frequency
+// noise. Fed straight into the band width that dithers the top edge and sprays
+// spurs at about -96 dBFS, so the velocity estimate gets a one-pole at 640 Hz,
+// which is exactly where that noise lives and far above anything a musical
+// drive signal does. Cost: the band lags a genuinely fast change in drive rate
+// by a quarter of a millisecond.
+static constexpr double kTrackTau = 0.00025;
 
 struct BlipSync : public Unit {
     double m_phase;
     double m_freq, m_maxfreq, m_minfreq, m_phaseoff, m_syncphase;
     double m_rotate, m_tilt;
     double m_syncPrev;
+    double m_poffPrev;
+    double m_trackVel, m_trackCoef;
+    bool m_trackInit;
     double m_blep0, m_blep1;
-    double m_nyq, m_sampleDur;
+    double m_nyq, m_sampleDur, m_sampleRate;
     blipsync::Band m_band;
     bool m_bandValid;
     int m_syncMode;
     bool m_rms;
+    bool m_track;
 };
 
 // A single input, read either straight from an audio-rate block or ramped
@@ -106,19 +127,28 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
     const float* syncBuf = (INRATE(kSync) == calc_FullRate) ? IN(kSync) : nullptr;
     const double syncK = (double)IN0(kSync);
 
+    const bool track = unit->m_track;
+
     // The band description only has to be rebuilt when one of the three
     // frequencies actually moves; holding it still costs ~2/3 of the CPU.
-    const bool staticBand =
-        unit->m_bandValid && fr.constant() && mx.constant() && mn.constant() && tl.constant();
+    // Tracking makes the band depend on the phase input too, so then that input
+    // has to be standing still as well.
+    const bool staticBand = unit->m_bandValid && fr.constant() && mx.constant() && mn.constant()
+        && tl.constant() && (!track || po.constant());
 
     blipsync::Band band = unit->m_band;
     const double nyq = unit->m_nyq;
     const double sampleDur = unit->m_sampleDur;
+    const double sampleRate = unit->m_sampleRate;
     const bool rms = unit->m_rms;
     const int syncMode = unit->m_syncMode;
 
     double phase = unit->m_phase;
     double syncPrev = unit->m_syncPrev;
+    double poffPrev = unit->m_poffPrev;
+    double trackVel = unit->m_trackVel;
+    bool trackInit = unit->m_trackInit;
+    const double trackCoef = unit->m_trackCoef;
     double blep0 = unit->m_blep0;
     double blep1 = unit->m_blep1;
 
@@ -132,8 +162,33 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         const double rot = ro.next();
         const double tilt = tl.next();
 
+        // How fast the waveform is actually being read: freq plus whatever the
+        // phase input is doing. Differencing poff rather than the total phase
+        // keeps a hard-sync jump (which lands in phase, not poff) out of the
+        // estimate, so no special case is needed there. The wrap makes a
+        // 0..1 ramp input recover its true increment across the period edge.
+        double bandf = freq;
+        if (track) {
+            double dp = poff - poffPrev;
+            dp -= std::floor(dp + 0.5);
+            // makeBand only looks at the magnitude, so smooth |velocity|.
+            const double v = std::fabs(freq + dp * sampleRate);
+            if (trackInit) {
+                trackVel += (v - trackVel) * trackCoef;
+            } else {
+                // Before the drive has moved there is no velocity to filter
+                // towards; seeding the state on the first real motion avoids an
+                // opening transient where the band is wildly wrong.
+                trackVel = v;
+                trackInit = (dp != 0.0);
+            }
+            const double lim = std::min(maxf, nyq) * (1.0 / kMaxHarm);
+            bandf = trackVel < lim ? lim : trackVel;
+        }
+        poffPrev = poff;
+
         if (!staticBand)
-            band = blipsync::makeBand(freq, minf, maxf, tilt, nyq, rms);
+            band = blipsync::makeBand(bandf, minf, maxf, tilt, nyq, rms);
 
         // With neither tilt nor rotation the original real-valued kernel runs,
         // so the default configuration is bit-for-bit unchanged.
@@ -209,6 +264,9 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
 
     unit->m_phase = phase;
     unit->m_syncPrev = syncPrev;
+    unit->m_poffPrev = poffPrev;
+    unit->m_trackVel = trackVel;
+    unit->m_trackInit = trackInit;
     unit->m_blep0 = blep0;
     unit->m_blep1 = blep1;
     unit->m_band = band;
@@ -217,6 +275,7 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
 
 void BlipSync_Ctor(BlipSync* unit) {
     unit->m_sampleDur = (double)SAMPLEDUR;
+    unit->m_sampleRate = (double)SAMPLERATE;
     // Keep the top of the band strictly below Nyquist. When the fundamental
     // itself climbs past this, the highest harmonic index falls below 1 and the
     // oscillator fades out rather than folding over.
@@ -224,6 +283,7 @@ void BlipSync_Ctor(BlipSync* unit) {
 
     unit->m_syncMode = (int)IN0(kSyncMode);
     unit->m_rms = IN0(kNormalize) > 0.5f;
+    unit->m_track = IN0(kTrack) > 0.5f;
 
     const double iphase = (double)IN0(kIPhase);
     unit->m_phase = iphase - std::floor(iphase);
@@ -232,6 +292,10 @@ void BlipSync_Ctor(BlipSync* unit) {
     unit->m_maxfreq = (double)IN0(kMaxFreq);
     unit->m_minfreq = (double)IN0(kMinFreq);
     unit->m_phaseoff = (double)IN0(kPhase);
+    unit->m_poffPrev = (double)IN0(kPhase);
+    unit->m_trackVel = 0.0;
+    unit->m_trackInit = false;
+    unit->m_trackCoef = 1.0 - std::exp(-1.0 / (kTrackTau * unit->m_sampleRate));
     unit->m_syncphase = (double)IN0(kSyncPhase);
     unit->m_syncPrev = (double)IN0(kSync);
     unit->m_rotate = (double)IN0(kRotate);
@@ -245,9 +309,13 @@ void BlipSync_Ctor(BlipSync* unit) {
     // Emit one sample, then rewind the state the way Blip does.
     const double savedPhase = unit->m_phase;
     const double savedSync = unit->m_syncPrev;
+    const double savedPoff = unit->m_poffPrev;
     BlipSync_next(unit, 1);
     unit->m_phase = savedPhase;
     unit->m_syncPrev = savedSync;
+    unit->m_poffPrev = savedPoff;
+    unit->m_trackVel = 0.0;
+    unit->m_trackInit = false;
     unit->m_blep0 = 0.0;
     unit->m_blep1 = 0.0;
 }

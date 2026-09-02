@@ -130,6 +130,33 @@ Useful range is roughly 0 to -12 dB/kHz. Worth reaching for when there is
 saturation downstream: a brick-wall impulse train is very peaky, so a waveshaper
 mostly flattens its tip; a tilted pulse is wider and distorts far more evenly.
 
+ARGUMENT:: track
+INIT RATE. 0 (the default) derives the band width from STRONG::freq:: alone.
+1 derives it from the TOTAL phase velocity, code::freq + d(phase)/dt::.
+
+Two uses.
+
+STRONG::Drive the oscillator entirely from phase.:: Set code::freq: 0:: and feed
+STRONG::phase:: a code::Phasor::, another BlipSync's phase output, or anything
+else that ramps; the band limit then follows whatever rate that source is
+running at. Without tracking this is silent, because code::maxfreq/0:: is zero
+harmonics. Measured against the equivalent freq-driven oscillator (200 Hz,
+code::maxfreq: 8000::), the 40 harmonic amplitudes agree to 0.0035 dB and the
+worst spurious component above 10 kHz is -142 dBFS.
+
+STRONG::Band-limit phase modulation.:: With tracking on, a fast modulator on
+STRONG::phase:: narrows the band as the instantaneous frequency rises instead of
+folding over. For a 300 Hz carrier at code::maxfreq: 6000:: with +-942 Hz of
+deviation, aliasing measures -43 dB relative to signal with tracking against
+-21 dB without. The timbre changes as it does so -- this is dynamic band
+limiting, not a transparent fix.
+
+The velocity estimate is smoothed with a 0.25 ms one-pole, because differencing
+a float32 phase signal turns its quantisation into high-frequency noise on the
+band edge. So the band lags a genuinely abrupt change of drive rate by that
+much, and a phase input that stops moving asks for an infinitely narrow impulse
+and gets near-silence.
+
 METHOD:: arSig
 As code::ar::, but returns only the waveform channel and accepts
 code::mul:: / code::add::.
@@ -254,6 +281,31 @@ s.boot;
 }.play
 )
 
+// 12b. driven entirely from an external phase: freq 0, track 1.
+//      the band limit follows the Phasor's rate, so it stays alias-free
+//      while you scrub, warp or stop the ramp
+(
+{
+    var rate = MouseX.kr(20, 600, 1);
+    var ph = Phasor.ar(0, rate * SampleDur.ir, 0, 1);
+    BlipSync.ar(0, 6000, phase: ph, track: 1).at(0) * 0.2 ! 2
+}.play
+)
+
+// 12c. one clock, several timbres: every voice reads the same phase ramp, so
+//      they are locked to the sample and only the band and offset differ
+(
+{
+    var ph = Phasor.ar(0, 60 * SampleDur.ir, 0, 1);
+    Splay.ar(
+        Array.fill(5, { |i|
+            BlipSync.ar(0, 800 * (i + 1), phase: ph + (i / 40),
+                        track: 1, tilt: -2).at(0)
+        })
+    ) * 0.15
+}.play
+)
+
 // 12. an oscillator bank with spread initial phases
 (
 {
@@ -282,7 +334,7 @@ default does so for any fundamental under about 4 kHz.
 ## A fundamental above the band limit fades out rather than folding over.
 ## The band limit applies to the UNMODULATED spectrum. Deep FM or PM spreads each
 harmonic well past STRONG::maxfreq:: and will alias; lower STRONG::maxfreq:: when
-modulating hard.
+modulating hard, or use code::track: 1:: to make PM band-limit itself.
 ## code::normalize: 1:: holds the RMS at 0.707 for any bandwidth, so the peak is
 sqrt(W) -- about 7.4 for a 54-harmonic band. Scale accordingly.
 ## code::ar:: has no mul/add because it returns two channels and madd would scale

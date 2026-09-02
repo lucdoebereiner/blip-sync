@@ -208,6 +208,38 @@ This is what makes Kuramoto-style work direct: read the phases, compute
 `sin(2π(θⱼ − θᵢ))`, add it to the frequency inputs, done. `iphase` spreads the
 starting phases of a bank.
 
+### Driving it from phase alone: `track`
+
+The band width is `maxfreq / freq`, so `freq: 0` means zero harmonics and
+silence — the phase input reads the waveform but says nothing about how wide the
+band may be. `track: 1` derives the width from the **total phase velocity**,
+`freq + d(phase)/dt`, which makes both of these work:
+
+- `freq: 0` plus a `Phasor`, another BlipSync's phase output, or any other ramp
+  on `phase`. The band limit follows whatever rate that source runs at, so the
+  thing stays alias-free while you scrub, warp or stop the drive. Against the
+  equivalent freq-driven oscillator (200 Hz, `maxfreq` 8000) the 40 harmonic
+  amplitudes agree to **0.0035 dB** and the worst component above 10 kHz is
+  **−142 dBFS**.
+- Phase modulation that band-limits itself. A fast modulator on `phase` raises
+  the instantaneous frequency, and with tracking the band narrows to match
+  instead of folding over. 300 Hz carrier, `maxfreq` 6000, ±942 Hz deviation,
+  measured against the same synth rendered at 384 kHz and decimated: **−43 dB**
+  of aliasing with tracking, **−21 dB** without. It is dynamic band limiting,
+  not a transparent fix — the timbre moves as the band does.
+
+Two things are worth knowing. The velocity estimate is smoothed with a 0.25 ms
+one-pole: differencing a float32 phase signal turns its quantisation into
+high-frequency noise, and feeding that straight into the band edge dithers the
+top harmonic and sprays spurs at −96 dBFS. With the filter a swept phase drive
+measures −107 dBFS worst spur against −139 dBFS for the same sweep driven by
+`freq`; the price is that the band lags a genuinely abrupt change of drive rate
+by a quarter millisecond. And a phase input that stops moving is asking for an
+infinitely narrow impulse, so it goes quiet rather than freezing on a value.
+
+Tracking is off by default and init-rate, so nothing about the existing
+behaviour changes.
+
 ### Hard sync
 
 `sync` accepts either a trigger (mode 0) or a 0..1 phase ramp (mode 1). Mode 1
@@ -252,7 +284,8 @@ no output latency.
 - **FM and PM widen the spectrum.** The band limit applies to the *unmodulated*
   spectrum. Deep modulation spreads each harmonic well beyond `maxfreq` and will
   alias — measured at −31 dBFS for PM with index 2 on a 220 Hz carrier at
-  `maxfreq` 8000. Lower `maxfreq` when modulating hard. This is physics, not an
+  `maxfreq` 8000. Lower `maxfreq` when modulating hard, or turn on `track: 1`
+  and let the band follow the instantaneous frequency. This is physics, not an
   implementation defect.
 - **`rotate` costs nothing spectrally.** It is a pure phase rotation, so it
   cannot introduce aliasing or change loudness at any modulation rate.
@@ -279,6 +312,9 @@ At 48 kHz, per voice, one core:
 | with `rotate` and/or `tilt` engaged | 31.8 | 0.15% |
 | `freq`/`minfreq`/`maxfreq`/`tilt` at audio rate | 43.1 | 0.21% |
 
+`track: 1` makes the band depend on the phase input, so it is rebuilt every
+sample and costs the same as the audio-rate row.
+
 Independent of how many harmonics are in the band — 2 Hz with 10 000 harmonics
 costs the same as 2 kHz with 5.
 
@@ -294,3 +330,10 @@ binary and prints the comparison table. `sclang nrt.scd && python3 check.py`
 renders the installed UGen through `scsynth` in NRT and checks peak levels,
 band emptiness, phase-output continuity, sync lock and behaviour under garbage
 input.
+
+```sh
+sclang trk.scd 48000 && sclang trk.scd 384000 && python3 trkcheck.py
+```
+
+covers `track: 1`: phase-driven against freq-driven, a swept drive rate, and PM
+aliasing measured against an 8x oversampled render of the same synth.

@@ -40,19 +40,27 @@ BlipSync : MultiOutUGen {
     //             frequency, referenced to the fundamental, applied UNDER the
     //             maxfreq brick wall. Softens the pulse and removes the
     //             brick-wall ringing.
+    // track     - 0: the band width is derived from freq alone (default,
+    //                unchanged behaviour).
+    //             1: it is derived from the TOTAL phase velocity, i.e.
+    //                freq + d(phase)/dt. Set freq to 0 and drive phase from a
+    //                Phasor / another BlipSync's phase output / anything else,
+    //                and the band limit follows that source's rate. Also makes
+    //                fast phase modulation band-limit itself instead of
+    //                aliasing. INIT RATE.
     *ar { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
           syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
-          rotate = 0, tilt = 0|
+          rotate = 0, tilt = 0, track = 0|
         ^this.multiNew('audio', freq, maxfreq, minfreq, phase, sync,
-                       syncPhase, syncMode, iphase, normalize, rotate, tilt)
+                       syncPhase, syncMode, iphase, normalize, rotate, tilt, track)
     }
 
     // Convenience: just the waveform.
     *arSig { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
               syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
-              rotate = 0, tilt = 0, mul = 1, add = 0|
+              rotate = 0, tilt = 0, track = 0, mul = 1, add = 0|
         ^BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
-                     syncMode, iphase, normalize, rotate, tilt).at(0).madd(mul, add)
+                     syncMode, iphase, normalize, rotate, tilt, track).at(0).madd(mul, add)
     }
 
     init { |... theInputs|
@@ -61,10 +69,11 @@ BlipSync : MultiOutUGen {
     }
 
     checkInputs {
-        #[6, 7, 8].do { |i|
+        #[6, 7, 8, 11].do { |i|
             if(inputs[i].rate != 'scalar') {
                 ^("BlipSync: input % (%) must be a constant"
-                    .format(i, #["syncMode", "iphase", "normalize"][i - 6]))
+                    .format(i, ["syncMode", "iphase", "normalize", "track"]
+                        .at(#[6, 7, 8, 11].indexOf(i))))
             }
         };
         ^this.checkValidInputs
