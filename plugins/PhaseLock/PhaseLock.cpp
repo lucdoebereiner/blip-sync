@@ -2,24 +2,32 @@
     PhaseLock -- a bank of phase-locked oscillators driven by an external
     master phase.
 
-    n slaves, each with its own natural frequency, each pulled toward
-    ratio*masterPhase by a proportional phase correction, plus an optional
-    mutual (Kuramoto) pull toward the bank's own mean field. Outputs n phase
-    ramps in 0..1, which is exactly what BlipSync consumes with freq: 0 and
-    track: 1.
+    n slaves, each with its own natural frequency, each pulled toward the master
+    at a rational ratio, plus an optional mutual (Kuramoto) pull toward the
+    bank's own mean field. Outputs n phase ramps in 0..1, which is exactly what
+    BlipSync consumes with freq: 0 and track: 1.
 
-        ph[j] += f[j]/sr  +  k * wrap(ratio[j]*master - ph[j])
-                          +  mutual * R * sin(2*pi*(psi - ph[j]))
+        e      = wrap(num[j]*master - den[j]*ph[j])      // in [-0.5, 0.5)
+        ph[j] += freq[j]/sr  +  (k/den[j]) * e  +  mutual * R*sin(2pi*(psi - ph[j]))
+
+    Locking num:den means den slave cycles per num master cycles, so 1:1 is
+    unison, 3:1 is three pulses per master cycle and 1:3 is one per three. Both
+    are rounded to integers: theta -> n*theta is a well defined map of the circle
+    only for integer n, and a fractional one puts a jump of frac(n) into the
+    target at every wrap of the master -- a periodic kick, not a lock. Rounding
+    means num and den can be modulated: they step cleanly between lock ratios
+    instead of sliding through undefined ones.
 
     The point of taking the master as a SIGNAL rather than a frequency is that
     the bank can then be chained: a level's output phases each become the master
     of a bank below it, so a hierarchy is a tree of these, one instance per node,
-    with its own coupling strength. Per-slave ratios let a level lock in whole
-    number ratios to a slower one above it.
+    with its own coupling strength.
 
-    k is a per-sample fraction of the phase error, so it behaves like a
-    first-order loop: the lock is stable for 0 < k < 1 and captures a detuning
-    of roughly 0.5*k*sr Hz. Negative values push away from the master.
+    k and mutual are both in Hz, and both mean the same thing: the largest
+    frequency pull the term can exert, which for k is also its capture range --
+    a slave detuned from num/den*masterFreq by less than k/den Hz locks, one
+    detuned by more slips. Being frequencies they are sample rate independent.
+    The loop settles with a time constant of 1/(2k) seconds.
 */
 
 #include "SC_PlugIn.h"
@@ -32,13 +40,16 @@ static InterfaceTable* ft;
 enum {
     kN = 0,     // init-rate: number of slaves
     kMaster,    // master phase, 0..1
-    kK,         // pull toward the master
-    kMutual,    // pull toward the bank's own mean field
-    kNumFixed   // then n freqs, n ratios (init), n iphases (init)
+    kK,         // pull toward the master, Hz
+    kMutual,    // pull toward the bank's own mean field, Hz
+    kNumFixed   // then n freqs, n ratios, n subs, n iphases (iphases init-rate)
 };
 
 // [-0.5, 0.5): the shortest way round the circle.
 static inline double wrapHalf(double x) { return x - std::floor(x + 0.5); }
+
+// Deterministic round-half-up, independent of the FPU rounding mode.
+static inline double roundInt(double x) { return std::floor(x + 0.5); }
 
 struct Ramp {
     const float* buf;
@@ -54,11 +65,10 @@ struct Ramp {
 
 struct PhaseLock : public Unit {
     int m_n;
-    double* m_phase;  // n
-    double* m_fprev;  // n
-    double* m_ratio;  // n
-    double* m_cs;     // 2n scratch for the mean field
-    Ramp* m_fr;       // n
+    double* m_phase; // n
+    double* m_prev;  // 3n: freqs, ratios, subs
+    double* m_cs;    // 2n scratch for the mean field
+    Ramp* m_ramp;    // 3n
     double m_masterPrev, m_kPrev, m_mutPrev;
     double m_sampleDur;
     bool m_ok;
@@ -70,7 +80,7 @@ void PhaseLock_Dtor(PhaseLock* unit);
 void PhaseLock_next(PhaseLock* unit, int inNumSamples);
 }
 
-static inline Ramp scalarRamp(Unit* unit, int index, int n, double& prev) {
+static inline Ramp makeRamp(Unit* unit, int index, int n, double& prev) {
     Ramp r;
     if (INRATE(index) == calc_FullRate) {
         r.buf = IN(index);
@@ -90,9 +100,8 @@ static inline Ramp scalarRamp(Unit* unit, int index, int n, double& prev) {
 void PhaseLock_next(PhaseLock* unit, int inNumSamples) {
     const int n = unit->m_n;
     double* phase = unit->m_phase;
-    double* ratio = unit->m_ratio;
     double* cs = unit->m_cs;
-    Ramp* fr = unit->m_fr;
+    Ramp* rp = unit->m_ramp;
     const double sd = unit->m_sampleDur;
 
     // The master is a phase ramp: interpolating a control-rate one has to take
@@ -108,17 +117,20 @@ void PhaseLock_next(PhaseLock* unit, int inNumSamples) {
         unit->m_masterPrev = nx;
     }
 
-    Ramp kr = scalarRamp(unit, kK, inNumSamples, unit->m_kPrev);
-    Ramp mr = scalarRamp(unit, kMutual, inNumSamples, unit->m_mutPrev);
-    for (int j = 0; j < n; ++j)
-        fr[j] = scalarRamp(unit, kNumFixed + j, inNumSamples, unit->m_fprev[j]);
+    Ramp kr = makeRamp(unit, kK, inNumSamples, unit->m_kPrev);
+    Ramp mr = makeRamp(unit, kMutual, inNumSamples, unit->m_mutPrev);
+    for (int j = 0; j < 3 * n; ++j)
+        rp[j] = makeRamp(unit, kNumFixed + j, inNumSamples, unit->m_prev[j]);
 
     for (int i = 0; i < inNumSamples; ++i) {
         const double master = mbuf ? (double)mbuf[i] : mval;
-        double k = kr.next();
-        double mut = mr.next();
         mval += mslope;
 
+        // Hz -> per-sample coefficients. The k term acts on an error bounded by
+        // 0.5 and the mutual term on one bounded by 1, so the factor of two
+        // makes both mean "this many Hz of pull at most".
+        double k = 2.0 * kr.next() * sd;
+        double mut = mr.next() * sd;
         if (k > 1.0) k = 1.0; else if (k < -1.0) k = -1.0;
         if (mut > 1.0) mut = 1.0; else if (mut < -1.0) mut = -1.0;
 
@@ -139,8 +151,13 @@ void PhaseLock_next(PhaseLock* unit, int inNumSamples) {
         }
 
         for (int j = 0; j < n; ++j) {
-            double p = phase[j] + fr[j].next() * sd;
-            p += k * wrapHalf(ratio[j] * master - phase[j]);
+            const double num = roundInt(rp[n + j].next());
+            double den = roundInt(rp[2 * n + j].next());
+            if (den < 1.0)
+                den = 1.0;
+
+            double p = phase[j] + rp[j].next() * sd;
+            p += (k / den) * wrapHalf((num * master) - (den * phase[j]));
             if (mut != 0.0)
                 p += mut * ((ms * cs[j]) - (mc * cs[n + j]));
             p -= std::floor(p);
@@ -160,24 +177,23 @@ void PhaseLock_Ctor(PhaseLock* unit) {
 
     const int m = unit->m_n;
     unit->m_phase = (double*)RTAlloc(unit->mWorld, m * sizeof(double));
-    unit->m_fprev = (double*)RTAlloc(unit->mWorld, m * sizeof(double));
-    unit->m_ratio = (double*)RTAlloc(unit->mWorld, m * sizeof(double));
+    unit->m_prev = (double*)RTAlloc(unit->mWorld, 3 * m * sizeof(double));
     unit->m_cs = (double*)RTAlloc(unit->mWorld, 2 * m * sizeof(double));
-    unit->m_fr = (Ramp*)RTAlloc(unit->mWorld, m * sizeof(Ramp));
+    unit->m_ramp = (Ramp*)RTAlloc(unit->mWorld, 3 * m * sizeof(Ramp));
 
-    if (!unit->m_phase || !unit->m_fprev || !unit->m_ratio || !unit->m_cs || !unit->m_fr) {
-        Print("PhaseLock: RTAlloc failed, increase the real time memory size\n");
+    if (!unit->m_phase || !unit->m_prev || !unit->m_cs || !unit->m_ramp) {
+        Print("PhaseLock: RTAlloc failed, raise s.options.memSize\n");
         SETCALC(ClearUnitOutputs);
         ClearUnitOutputs(unit, 1);
         return;
     }
     unit->m_ok = true;
 
+    for (int j = 0; j < 3 * m; ++j)
+        unit->m_prev[j] = (double)IN0(kNumFixed + j);
     for (int j = 0; j < m; ++j) {
-        unit->m_ratio[j] = (double)IN0(kNumFixed + m + j);
-        const double ip = (double)IN0(kNumFixed + 2 * m + j);
+        const double ip = (double)IN0(kNumFixed + 3 * m + j);
         unit->m_phase[j] = ip - std::floor(ip);
-        unit->m_fprev[j] = (double)IN0(kNumFixed + j);
     }
     unit->m_masterPrev = (double)IN0(kMaster);
     unit->m_kPrev = (double)IN0(kK);
@@ -192,10 +208,9 @@ void PhaseLock_Dtor(PhaseLock* unit) {
     if (!unit->m_ok)
         return;
     RTFree(unit->mWorld, unit->m_phase);
-    RTFree(unit->mWorld, unit->m_fprev);
-    RTFree(unit->mWorld, unit->m_ratio);
+    RTFree(unit->mWorld, unit->m_prev);
     RTFree(unit->mWorld, unit->m_cs);
-    RTFree(unit->mWorld, unit->m_fr);
+    RTFree(unit->mWorld, unit->m_ramp);
 }
 
 PluginLoad(PhaseLockUGens) {

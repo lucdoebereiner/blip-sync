@@ -14,8 +14,11 @@ Plus `PhaseLock`, a bank of phase-locked oscillators that emits phase ramps for
 BlipSync to read — see [section 4](#4-phaselock-a-chainable-pll-bank).
 
 ```
-phases = PhaseLock.ar(master, freqs, k, mutual, ratios, iphases)
+phases = PhaseLock.ar(master, freqs, k, mutual, ratios, subs, iphases)
 ```
+
+Complete worked patches, from one oscillator to a three-level hierarchy, are in
+[`examples/phase-networks.scd`](examples/phase-networks.scd).
 
 Build:
 
@@ -379,48 +382,87 @@ no output latency.
 ## 4. `PhaseLock`: a chainable PLL bank
 
 *n* phase oscillators, each with its own natural frequency, each pulled toward an
-external master phase; *n* phase ramps out. Per sample, for slave *j*:
+external master phase at a rational ratio; *n* phase ramps out. Per sample, for
+slave *j*:
 
 ```
+e      = wrap(ratios[j]*master - subs[j]*ph[j])        // in [-0.5, 0.5)
 ph[j] += freq[j]/sr
-       + k      * wrap(ratios[j]*master - ph[j])     // toward the parent
-       + mutual * R * sin(2π(ψ - ph[j]))             // toward the siblings
+       + (k/subs[j]) * e                               // toward the parent
+       + mutual * R*sin(2π(ψ - ph[j]))                 // toward the siblings
 ```
 
 The master is a **signal**, not a frequency, and that is the whole point: banks
 chain. One bank's output phase becomes the master of a bank below it, so a
 hierarchy is a tree of these — one instance per node, each with its own coupling
-strength — and per-slave `ratios` let a level lock in whole-number ratios to a
-slower one above it. A PLL that generates its own master internally can only
-ever be one level deep.
+strength and ratios. A PLL that generates its own master internally can only ever
+be one level deep.
 
-`k` is a first-order loop, so it captures a detuning of about `0.5·k·sr` Hz.
-Measured on a two-level tree at 48 kHz — four group nodes at 2:3:4:5 against a
-25 Hz conductor, detuned by +3/−4/+5/−2 Hz, four members locked under each node:
+### `k` and `mutual` are frequencies
 
-| k_in | k_lock | members → node | nodes → conductor (×2 ×3 ×4 ×5) | capture |
-|---|---|---|---|---|
-| 0.004 | 0 | 1.000 ×4 | 0.02 0.02 0.00 0.03 | — |
-| 0.004 | 0.00005 | 1.000 ×4 | 0.15 0.09 0.06 0.23 | 1.2 Hz |
-| 0.004 | 0.0002 | 1.000 ×4 | **1.000 1.000 0.52 1.000** | 4.8 Hz |
-| 0.004 | 0.001 | 1.000 ×4 | 1.000 1.000 1.000 1.000 | 24 Hz |
-| 0 | 0.001 | 0.03 0.01 0.02 0.26 | 1.000 1.000 1.000 1.000 | 24 Hz |
+Both are in **Hz**, and both mean the largest frequency pull the term can exert.
+For `k` that is also the capture range: a slave detuned from its locked frequency
+by less than `k/subs` Hz locks, one detuned by more slips. Four slaves at 2:3:4:5
+against a 25 Hz conductor, detuned by +3/−4/+5/−2 Hz:
 
-The third row is the formula being right: a 4.8 Hz capture range locks the
-groups detuned by 3, 4 and 2 Hz and sits exactly on the boundary at 5 Hz. Row
-two is the shape asked for — each group internally rigid, the groups drifting
-against the conductor — and the last row shows the levels are independent.
-
-`mutual` adds the bank's own Kuramoto mean field, so a bank coheres with no
-master at all. Eight oscillators spread over 90–120 Hz:
-
-| mutual | 0 | 0.0005 | 0.002 | 0.008 | −0.004 |
+| k (Hz) | ×2 | ×3 | ×4 | ×5 | |
 |---|---|---|---|---|---|
-| R | 0.23 | 0.88 | 0.995 | 1.000 | 0.03 |
+| 0 | 0.018 | 0.022 | 0.000 | 0.028 | |
+| 1 | 0.129 | 0.061 | 0.054 | 0.187 | |
+| 2.5 | 0.347 | 0.242 | 0.190 | **1.000** | captures the 2 Hz one |
+| 4.5 | **1.000** | **1.000** | 0.385 | **1.000** | and the 3 and 4, not the 5 |
+| 10 | 1.000 | 1.000 | 1.000 | 1.000 | |
 
-Negative repels: R drops below the uncoupled value as the bank spreads itself
-into anti-phase. Alias floor through BlipSync stays below −142 dBFS in every row
-of both tables.
+The capture range is literally the number you typed. Rendering the same test at
+96 kHz reproduces this table to three decimals — that is what the Hz units buy;
+a per-sample coefficient would have meant a different loop at every sample rate.
+The settling time constant is `1/(2k)` seconds.
+
+`mutual` is the bank's own Kuramoto mean field, so a bank coheres with no master
+at all, and the units line up with the `K` of section 2. Eight oscillators spread
+over 90–120 Hz:
+
+| mutual (Hz) | 0 | 5 | 12 | 25 | 60 | −30 |
+|---|---|---|---|---|---|---|
+| R | 0.230 | 0.280 | 0.292 | **0.892** | 0.986 | 0.168 |
+
+The transition sits where the coupling passes the width of the bank; negative
+coupling drives R below its uncoupled value as the bank spreads into anti-phase.
+
+### Ratios are rational, and modulatable
+
+`ratios : subs` is a lock ratio — `subs` slave cycles per `ratios` master cycles,
+so 3:1 is three pulses per conductor cycle, 1:3 is one per three, 3:2 is a three
+against two. Both are rounded to integers internally, and that is the definition
+rather than a limitation: `θ ↦ nθ` is a well-defined map of the circle only for
+integer *n*, and a fractional one puts a jump of `frac(n)` into the lock target
+at every wrap of the master — a periodic kick, not a lock.
+
+Because they round, they can be **modulated**: an LFO on `ratios` steps cleanly
+from one lock to the next. Sweeping a ratio input from 0.5 to 6.5 gives a
+staircase of locked frequencies at 25, 50, 75, 100, 125, 150 Hz against a 25 Hz
+conductor, each holding phase (lock 1.000). Feed `freqs` the same modulator so
+each slave already sits near its new target; otherwise the jump itself has to
+fall inside the capture range, which needs a much stiffer loop.
+
+### A hierarchy
+
+Measured on a two-level tree — four group nodes at 2:3:4:5 against a 25 Hz
+conductor, detuned by +3/−4/+5/−2 Hz, four members locked under each node:
+
+| k_in | k_lock | members → node | nodes → conductor (×2 ×3 ×4 ×5) |
+|---|---|---|---|
+| 96 Hz | 0 | 1.000 ×4 | 0.02 0.02 0.00 0.03 |
+| 96 Hz | 1.2 Hz | 1.000 ×4 | 0.15 0.09 0.06 0.23 |
+| 96 Hz | 4.8 Hz | 1.000 ×4 | **1.000 1.000 0.52 1.000** |
+| 96 Hz | 24 Hz | 1.000 ×4 | 1.000 1.000 1.000 1.000 |
+| 0 | 24 Hz | 0.03 0.01 0.02 0.26 | 1.000 1.000 1.000 1.000 |
+
+Row one is the shape worth having: each group internally rigid, the groups
+drifting freely against the conductor. Row three is the capture formula being
+right to the boundary — 4.8 Hz locks the groups detuned 3, 4 and 2 Hz and lands
+exactly on the edge at 5. The last row shows the levels are independent. Alias
+floor through BlipSync stays below −142 dBFS in every row of every table here.
 
 A tree of banks is not the same thing as the mean field of section 2. In a tree
 each node has a definite phase that its children follow, so a group holds
