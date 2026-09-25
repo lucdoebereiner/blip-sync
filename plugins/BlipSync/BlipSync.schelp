@@ -86,10 +86,27 @@ INIT RATE. Initial phase in cycles. Use it to spread the starting phases of an
 oscillator bank. Default 0.
 
 ARGUMENT:: normalize
-INIT RATE. code::0:: -- peak normalisation, the waveform peaks at 1.0 like Blip;
-narrow bands are therefore quiet. code::1:: -- RMS normalisation, roughly
-constant loudness as the band width changes, which is usually what you want when
-sweeping STRONG::maxfreq::. Default 0.
+INIT RATE. Default 0.
+
+DEFINITIONLIST::
+## code::0:: || Peak. The waveform peaks at 1.0, like Blip; narrow bands are
+therefore quiet.
+## code::1:: || RMS. Roughly constant loudness as the band width changes, which
+is usually what you want when sweeping STRONG::maxfreq::. The peak is then
+sqrt(W) and can be well above 1.
+## code::2:: || Raw: no scaling at all. The weights ARE the amplitudes, so the
+fundamental sits at 1.0 whatever else the band is doing, and the peak is W --
+as high as the number of harmonics. Scale outside.
+::
+
+Modes 0 and 1 are level-preserving BY DESIGN, and that is exactly what a
+percussive sound must not be. Sweep STRONG::tilt:: downward as a decay envelope
+and under code::normalize: 0:: the bright impulse and the sine it collapses into
+come out at the same peak -- measured on a kick patch, code::0:: gives
+STRONG::+1.1 dB:: of attack over the body, code::1:: gives +15.8 dB and
+code::2:: gives STRONG::+32.1 dB::. For drums, use code::2::: your output gain
+then IS the level of the ringing body, and the attack rises above it by however
+many harmonics the tilt envelope opens up.
 
 ARGUMENT:: rotate
 Constant phase rotation applied to every harmonic, in CYCLES. Not the same as

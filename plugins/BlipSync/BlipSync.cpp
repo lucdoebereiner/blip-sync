@@ -31,7 +31,7 @@ enum {
     kSyncPhase,
     kSyncMode,  // init-rate: 0 = trigger, 1 = phase ramp
     kIPhase,    // init-rate
-    kNormalize, // init-rate: 0 = peak, 1 = RMS
+    kNormalize, // init-rate: 0 = peak, 1 = RMS, 2 = raw
     kRotate,
     kTilt,
     kTrack, // init-rate: 0 = band width from freq, 1 = from total phase velocity
@@ -67,7 +67,7 @@ struct BlipSync : public Unit {
     blipsync::Band m_band;
     bool m_bandValid;
     int m_syncMode;
-    bool m_rms;
+    int m_norm;
     bool m_track;
 };
 
@@ -140,7 +140,7 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
     const double nyq = unit->m_nyq;
     const double sampleDur = unit->m_sampleDur;
     const double sampleRate = unit->m_sampleRate;
-    const bool rms = unit->m_rms;
+    const int norm = unit->m_norm;
     const int syncMode = unit->m_syncMode;
 
     double phase = unit->m_phase;
@@ -188,7 +188,7 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         poffPrev = poff;
 
         if (!staticBand)
-            band = blipsync::makeBand(bandf, minf, maxf, tilt, nyq, rms);
+            band = blipsync::makeBand(bandf, minf, maxf, tilt, nyq, norm);
 
         // With neither tilt nor rotation the original real-valued kernel runs,
         // so the default configuration is bit-for-bit unchanged.
@@ -282,7 +282,10 @@ void BlipSync_Ctor(BlipSync* unit) {
     unit->m_nyq = (double)SAMPLERATE * 0.5 * 0.995;
 
     unit->m_syncMode = (int)IN0(kSyncMode);
-    unit->m_rms = IN0(kNormalize) > 0.5f;
+    {
+        int nm = (int)std::floor((double)IN0(kNormalize) + 0.5);
+        unit->m_norm = nm < 0 ? 0 : (nm > 2 ? 2 : nm);
+    }
     unit->m_track = IN0(kTrack) > 0.5f;
 
     const double iphase = (double)IN0(kIPhase);

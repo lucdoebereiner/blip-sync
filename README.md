@@ -317,6 +317,48 @@ The difference in feel is the difference between the two: Kuramoto integrates
 the pull, so it bends pitch and locks softly; a PLL displaces the phase
 directly, so it locks harder and can pull discontinuously.
 
+### Percussion: a tilt envelope is an attack
+
+`tilt` weights harmonic *k* by `r^(k-1)`. Sweeping it downward over time is
+therefore `w_k(t) = e^{-kt/τ}` — a modal decay in which the *k*-th harmonic dies
+*k* times faster than the fundamental, which is what a struck resonator does.
+A drum is a pitch envelope on `freq` plus a tilt envelope, nothing more exotic.
+
+The obstacle is that both original normalisations are level-preserving by
+design, and that is precisely what a percussive sound must not be. Under
+`normalize: 0` the bright impulse at the start and the pure sine it collapses
+into both peak at exactly 1.0, so there is no attack to be had. Measured on a
+kick patch (pitch 200→47 Hz over 50 ms, tilt 0→−500 over 35 ms, no amplitude
+envelope at all), peak per 4 ms block relative to the settled body:
+
+| normalize | 2 ms | 6 ms | 14 ms | 30 ms | 60 ms | 400 ms | attack over body |
+|---|---|---|---|---|---|---|---|
+| 0 peak | 1.1 | 1.1 | −0.2 | −2.2 | −0.9 | 0.0 | **+1.1 dB** |
+| 1 rms | 15.8 | −0.5 | −1.5 | −2.5 | −0.9 | 0.0 | +15.8 dB |
+| 2 raw | 32.1 | −0.7 | −1.7 | −2.5 | −0.9 | 0.0 | **+32.1 dB** |
+
+With `normalize: 2` the whole envelope is already in the spectrum — the second
+row of that table needs no amplitude envelope to be a drum. Practical
+consequences:
+
+- **Your output gain is the body level.** The fundamental's weight is 1 by
+  definition, so `* 0.12` means a body at 0.12 and an attack at
+  `0.12 × W(tilt at t=0)`.
+- **`tilt` at t=0 sets how hard the attack is.** Starting at 0 opens the whole
+  band (`W = maxfreq/freq`, +32 dB); starting around −6 dB/kHz at a 190 Hz
+  fundamental gives about +16 dB. Holding it open for the first few ms before
+  the collapse turns a thump into a click.
+- **Where `tilt` lands sets the ring.** Park it at −600 and the body is a pure
+  sine; park it at −40 and a couple of harmonics survive.
+- **`rotate` is beater hardness.** It preserves the magnitude spectrum but
+  spreads the impulse in time, so it drops the peak without touching the
+  loudness: 0 is a hard click, 0.22 is a soft thud ~15 dB lower in peak.
+- **Retrigger with `sync`.** `sync: trig, syncMode: 0` resets the phase so the
+  impulse lands exactly on the trigger rather than wherever the oscillator
+  happened to be.
+
+`examples/percussion.scd` has the worked patches.
+
 ### Hard sync
 
 `sync` accepts either a trigger (mode 0) or a 0..1 phase ramp (mode 1). Mode 1
@@ -372,6 +414,10 @@ no output latency.
   0.707 for any bandwidth, which means the peak is `sqrt(W)` — 7.4 for a 54
   harmonic band. Scale accordingly. Peak normalisation (the default, and Blip's
   behaviour) keeps the waveform at 1.0 but makes narrow bands quiet.
+- **`normalize: 2` is raw** and has no upper bound: the peak is `W`, the number
+  of harmonics in the band. In exchange the fundamental is always at 1.0, so
+  your output gain is the level of the body — see
+  [**Percussion: a tilt envelope is an attack**](#percussion-a-tilt-envelope-is-an-attack).
 - **No `mul`/`add` on `ar`**, because it returns two channels and `madd` would
   scale the phase output too. Use `.at(0) * amp`, or the `arSig` convenience
   method.

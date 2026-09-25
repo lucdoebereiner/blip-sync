@@ -25,7 +25,14 @@ BlipSync : MultiOutUGen {
     //                 recovers the crossing time exactly. INIT RATE.
     // iphase     - initial phase in cycles. INIT RATE.
     // normalize  - 0: peak (waveform peaks at 1.0, like Blip)
-    //              1: RMS  (roughly constant loudness as the band changes).
+    //              1: RMS  (roughly constant loudness as the band changes)
+    //              2: raw  (no scaling; the fundamental sits at 1.0 and the
+    //                 output level follows the band). Modes 0 and 1 are
+    //                 level-preserving BY DESIGN, so a collapsing band stays
+    //                 as loud as a sine and there is no attack to be had -- use
+    //                 2 for percussion, where a tilt envelope becomes the
+    //                 attack. Peak is then W, the number of harmonics in the
+    //                 band, so scale outside.
     //              INIT RATE.
     // rotate    - constant phase rotation of every harmonic, in CYCLES.
     //             0    = symmetric impulse (identical to before this existed)

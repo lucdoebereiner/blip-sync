@@ -123,9 +123,14 @@ inline double geomSum(double lq, double n) {
 }
 
 // nyq: highest permissible harmonic frequency (a hair under sr/2).
-// rms:  false -> peak-normalised (waveform peaks at 1, like Blip)
-//       true  -> RMS-normalised (roughly constant loudness across bandwidth)
-inline Band makeBand(double freq, double minfreq, double maxfreq, double tilt, double nyq, bool rms) {
+// norm: 0 -> peak-normalised (waveform peaks at 1, like Blip)
+//       1 -> RMS-normalised (roughly constant loudness across bandwidth)
+//       2 -> raw: no scaling at all, so the weights ARE the amplitudes and the
+//            fundamental sits at 1 whatever else the band is doing. This is the
+//            one to use when tilt is being swept as a decay envelope: both other
+//            modes hold the output level up as the harmonics die, which turns a
+//            decaying spectrum into a rising fundamental.
+inline Band makeBand(double freq, double minfreq, double maxfreq, double tilt, double nyq, int norm) {
     const double af = std::fabs(freq);
     Band b;
 
@@ -205,7 +210,11 @@ inline Band makeBand(double freq, double minfreq, double maxfreq, double tilt, d
     const double W2 = b.loAmp * b.loAmp + b.hiAmp * b.hiAmp
         + b.rA * b.rA * geomSum(2.0 * lnr, b.nFull);
 
-    if (rms) {
+    if (norm == 2) {
+        // Raw. Peak is W, i.e. as high as the number of harmonics in the band;
+        // scale outside.
+        b.norm = 1.0;
+    } else if (norm == 1) {
         // sum w_k cos(...) has RMS sqrt(W2/2), so 1/sqrt(W2) puts the output at
         // the RMS of a unit-amplitude sine (0.707) for any bandwidth. The peak
         // is then sqrt(W2) and can be well above 1 -- that is the price of
