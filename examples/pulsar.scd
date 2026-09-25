@@ -113,6 +113,26 @@ s.boot;
 
 
 // ---------------------------------------------------------------------------
+// 5b. A SUSTAINED TONE.  One grain that never ends: a single trigger, a decay
+//     long enough to be forever, and damp 0 so the spectrum never collapses.
+//     This matches BlipSync's plain blip train to within the phase offset of
+//     the onset window (measured peak 7.70 against 7.73 at tilt -6).
+//
+//     But freq is SNAPSHOT, so this tone cannot be bent afterwards. For a
+//     sustained oscillator you can sweep, sync and read the phase of, use
+//     BlipSync -- these are two instruments, and the attempt to make either do
+//     both jobs is exactly what makes freq confusing.
+(
+{ PulsarBlip.ar(Impulse.ar(0), 200, 1e6, 0, 1, -6, numVoices: 1) * 0.02 ! 2 }.play
+)
+
+// compare: the same tone from BlipSync, where freq is live and follows
+(
+{ BlipSync.ar(XLine.kr(200, 800, 4), 9000, tilt: -6, normalize: 2).at(0) * 0.02 ! 2 }.play
+)
+
+
+// ---------------------------------------------------------------------------
 // 6. CLOCKED BY A PHASE NETWORK.  trigMode 1 takes a 0..1 ramp directly, so a
 //    PhaseLock bank emits grains on its wraps -- one conductor, four streams in
 //    whole ratios, each with its own formant and grain length.

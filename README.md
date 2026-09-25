@@ -600,14 +600,14 @@ The two rates are independent, which is the point of the model — and it is
 exactly the thing that makes a single BlipSync confusing, where `freq` is both
 at once. Measured: sweeping the emission rate 4 → 200 Hz with `freq` fixed at
 600, the pitch climbs thirty-fold through the rhythm/pitch boundary while the
-spectral centroid stays at **3110 Hz** (3106 / 3106 / 3113 / 3325 across the
-sweep).
+spectral centroid barely moves — **1828 / 1825 / 1851 / 2146 Hz** across the
+sweep, the last rising only because the grains have begun to overlap.
 
 Overlap, emission 20 Hz against 0.6 s grains:
 
 | numVoices | 1 | 2 | 4 | 8 | 16 |
 |---|---|---|---|---|---|
-| rms vs one voice | +0.0 | +3.9 | +6.3 | +7.1 | +7.2 dB |
+| rms vs one voice | +0.0 | +3.4 | +5.6 | +6.3 | +6.4 dB |
 
 It saturates at 8 because by then the oldest grain is 40 dB down.
 
@@ -628,13 +628,14 @@ the waveform has. Against an 8× oversampled render:
 | | aliasing |
 |---|---|
 | round-robin of BlipSync voices (stepped onset) | −24.8 dB |
-| PulsarBlip (band-matched onset) | **−61.4 dB** |
+| PulsarBlip (band-matched onset) | **−76.1 dB** |
 
 One trap worth recording: that window must be a *duration*, never a sample
 count. Rounding it to samples makes each grain's onset time depend on the sample
 rate, shifting every grain by a few microseconds — and for impulses this narrow,
-a few microseconds is a large error. It measured **46 dB worse** and looked at
-first like the whole idea had failed.
+a few microseconds is a large error. In the like-for-like comparison it measured
+−15.3 dB against −61.4 dB, i.e. **worse than the round-robin it was meant to
+beat**, and looked at first like the whole idea had failed.
 
 Grains are independent, so nothing here needs the pitch to be an integer
 multiple of the emission rate. That constraint belongs to BlipSync's `sync`,

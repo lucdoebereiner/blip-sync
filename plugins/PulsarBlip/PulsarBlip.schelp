@@ -24,7 +24,8 @@ TELETYPE::
 The two rates are independent, which is the whole point of the model: sweep the
 emission rate from 4 Hz to 200 Hz with STRONG::freq:: fixed and the pitch climbs
 thirty-fold through the rhythm/pitch boundary while the formant does not move
-(measured: spectral centroid constant at 3110 Hz across that sweep).
+(measured spectral centroid 1828 / 1825 / 1851 / 2146 Hz across that sweep, the
+last rising only because the grains have started to overlap).
 
 STRONG::Two things this does that separate oscillators cannot::
 
@@ -38,14 +39,15 @@ discontinuity and therefore broadband. Instead the phase starts a little early
 and a raised cosine of the same length brings the amplitude up, so the impulse
 arrives precisely as the window reaches 1. The length is two periods of
 STRONG::maxfreq::, the only timescale the waveform has. Measured against an 8x
-oversampled render, this is code::-61.4 dB:: against code::-24.8 dB:: for the
+oversampled render, this is code::-76.1 dB:: against code::-24.8 dB:: for the
 same texture built from a round-robin of link::Classes/BlipSync:: voices.
 
 NOTE::
 The window is a duration, never a sample count. Rounding it to samples makes the
 grain's onset time depend on the sample rate, which shifts every grain by a few
 microseconds -- and for impulses this narrow, a few microseconds is a large
-error. It measured 46 dB worse.
+error. In the like-for-like test it measured -15.3 dB against -61.4 dB, worse
+than the round-robin it was meant to beat.
 ::
 
 CLASSMETHODS::
@@ -133,4 +135,11 @@ decay can never be freed.
 integer multiple of the emission rate -- that constraint belongs to
 link::Classes/BlipSync::'s sync, where one phase is being reset rather than a new
 voice started.
+## A SUSTAINED tone is one grain that never ends: code::decay: 1e6, damp: 0:: and
+a single trigger gives a plain blip train matching link::Classes/BlipSync:: to
+within the phase offset of the onset window. But STRONG::freq:: is snapshot, so
+that tone cannot be bent afterwards -- for a sustained oscillator you can play,
+sweep and sync, use link::Classes/BlipSync::. These are two instruments, not
+one, and trying to make either do both jobs is what made STRONG::freq:: confusing
+in the first place.
 ::

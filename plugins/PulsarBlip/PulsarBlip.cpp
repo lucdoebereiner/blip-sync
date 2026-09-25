@@ -197,12 +197,19 @@ void PulsarBlip_next(PulsarBlip* unit, int inNumSamples) {
                 v.inc = f * sd;
                 // Once both shaping envelopes have run out the band stops
                 // moving, so most of a grain's life costs only the waveform.
-                if (bandStatic && v.tiltEnv <= 0.0 && v.bendEnv < 1.0e-7)
+                // An unshaped grain (damp 0) has a static band from the start --
+                // which is the sustained case, where a grain may run forever.
+                if (bandStatic && (!v.shaped || v.tiltEnv <= 0.0) && v.bendEnv < 1.0e-7)
                     v.frozen = true;
             }
 
-            double y = v.plainRot ? blipsync::evalBand(v.band, v.phase)
-                                  : blipsync::evalBandRot(v.band, v.phase, v.rotCos, v.rotSin);
+            // evalBand is the UNTILTED real-valued kernel; a tilted band has to
+            // go through the complex one. band.plain says whether the weights
+            // are flat, so BOTH conditions have to hold to take the fast path --
+            // testing only rotate silently throws the tilt away.
+            const bool plain = v.plainRot && v.band.plain;
+            double y = plain ? blipsync::evalBand(v.band, v.phase)
+                             : blipsync::evalBandRot(v.band, v.phase, v.rotCos, v.rotSin);
             double g = v.amp;
             if (v.onsetPos < 1.0) {
                 g *= 0.5 * (1.0 - blipsync::cospi(v.onsetPos)); // raised cosine 0 -> 1
@@ -234,7 +241,11 @@ void PulsarBlip_Ctor(PulsarBlip* unit) {
     unit->m_sampleRate = (double)SAMPLERATE;
     unit->m_nyq = (double)SAMPLERATE * 0.5 * 0.995;
     unit->m_trigMode = (int)IN0(kTrigMode);
-    unit->m_trigPrev = (double)IN0(kTrig);
+    // Starts at zero, not at the input's first sample: a trigger that is
+    // already high on sample 0 -- Impulse.ar(0), a Trig fired at note start --
+    // must produce a grain. Seeding from the input would swallow it, and with
+    // Impulse.ar(0) that is the whole note.
+    unit->m_trigPrev = 0.0;
     unit->m_ok = false;
 
     unit->m_v = (Voice*)RTAlloc(unit->mWorld, n * sizeof(Voice));
