@@ -55,19 +55,55 @@ BlipSync : MultiOutUGen {
     //                and the band limit follows that source's rate. Also makes
     //                fast phase modulation band-limit itself instead of
     //                aliasing. INIT RATE.
+    //
+    // --- percussion. A strike and the three envelopes it fires, so a drum is
+    //     one UGen rather than three EnvGens and a sync wire. All four are
+    //     inert at their defaults.
+    // strike    - trigger. On a rising edge it restarts both envelopes and
+    //             puts the impulse on the edge itself, sub-sample accurate.
+    //             The UGen is born struck, so a one-shot synth needs no
+    //             trigger at all -- give it a decay and it fires once.
+    // decay     - amplitude: seconds to fall 60 dB. 0 = no amplitude envelope.
+    // bend      - pitch multiplier at the strike, falling to freq. 1 = none.
+    // damp      - dB/kHz of extra tilt reached by the end, so the spectrum
+    //             starts at tilt and darkens to tilt - damp as it rings. This
+    //             is the attack: it is the same exponential decay per harmonic
+    //             that a struck resonator has. 0 = none.
+    // snap      - seconds for bend and damp to travel 99% of the way. Short is
+    //             a click, long is a thump.
+    //             decay and snap are read once per block.
+    //
+    // Percussion wants normalize: 2. The other two modes are level-preserving
+    // by design, so the band collapsing under damp stays as loud as the sine it
+    // collapses into and there is no attack to be had.
     *ar { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
           syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
-          rotate = 0, tilt = 0, track = 0|
+          rotate = 0, tilt = 0, track = 0,
+          strike = 0, decay = 0, bend = 1, damp = 0, snap = 0.02|
         ^this.multiNew('audio', freq, maxfreq, minfreq, phase, sync,
-                       syncPhase, syncMode, iphase, normalize, rotate, tilt, track)
+                       syncPhase, syncMode, iphase, normalize, rotate, tilt, track,
+                       strike, decay, bend, damp, snap)
     }
 
     // Convenience: just the waveform.
     *arSig { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
               syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
-              rotate = 0, tilt = 0, track = 0, mul = 1, add = 0|
+              rotate = 0, tilt = 0, track = 0,
+              strike = 0, decay = 0, bend = 1, damp = 0, snap = 0.02,
+              mul = 1, add = 0|
         ^BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
-                     syncMode, iphase, normalize, rotate, tilt, track).at(0).madd(mul, add)
+                     syncMode, iphase, normalize, rotate, tilt, track,
+                     strike, decay, bend, damp, snap).at(0).madd(mul, add)
+    }
+
+    // A struck drum in one call: raw normalisation, a strike, and the three
+    // envelopes. Returns the waveform only. Everything else keeps its default,
+    // so this is just BlipSync.ar with the percussion arguments to the front.
+    *perc { |strike = 0, freq = 46, decay = 0.4, bend = 4, damp = 600,
+             snap = 0.04, tilt = -6, maxfreq = 9000, minfreq = 0, beater = 0,
+             mul = 1, add = 0|
+        ^BlipSync.ar(freq, maxfreq, minfreq, 0, 0, 0, 0, 0, 2, beater, tilt, 0,
+                     strike, decay, bend, damp, snap).at(0).madd(mul, add)
     }
 
     init { |... theInputs|

@@ -174,6 +174,59 @@ band edge. So the band lags a genuinely abrupt change of drive rate by that
 much, and a phase input that stops moving asks for an infinitely narrow impulse
 and gets near-silence.
 
+SUBSECTION:: Percussion
+
+A struck resonator is a spectrum whose high harmonics die faster than its low
+ones, and STRONG::tilt:: already says exactly that: weighting harmonic k by
+r^(k-1) and sweeping r down over time is w_k(t) = e^(-k*t/tau), the k-th
+harmonic dying k times faster than the fundamental. So a drum is a pitch
+envelope plus a tilt envelope, and these four arguments put both inside the
+UGen, fired by a STRONG::strike::. All of them are inert at their defaults.
+
+Percussion wants code::normalize: 2::. Modes 0 and 1 are level-preserving by
+design, so the band collapsing under STRONG::damp:: stays as loud as the sine it
+collapses into and there is no attack to be had -- see link::#normalize::.
+
+ARGUMENT:: strike
+Trigger. On a rising crossing of zero it restarts both envelopes and puts the
+impulse on the edge itself, using the same sub-sample crossing estimate as
+STRONG::sync:: (and landing, like it, two samples later). The UGen is born
+struck, so a one-shot synth needs no trigger at all: give it a
+STRONG::decay:: and it fires once when it starts.
+
+ARGUMENT:: decay
+Amplitude envelope: seconds to fall 60 dB. code::0:: (the default) means no
+amplitude envelope at all. Read once per block.
+
+ARGUMENT:: bend
+Pitch multiplier at the strike, falling to STRONG::freq::. code::4:: starts two
+octaves up. code::1:: is no pitch envelope.
+
+ARGUMENT:: damp
+dB per kHz of EXTRA tilt reached by the end of the strike: the spectrum starts
+at STRONG::tilt:: and darkens to code::tilt - damp:: as it rings. This is the
+attack -- the whole envelope of a drum is already in here, which is why the
+second-to-last row of the table under link::#normalize:: needs no amplitude
+envelope to be a drum. code::0:: is no tilt envelope.
+
+ARGUMENT:: snap
+Seconds for STRONG::bend:: and STRONG::damp:: to travel 99% of the way. Short is
+a click, long is a thump; it is the single most useful control of the four.
+Read once per block.
+
+METHOD:: perc
+A struck drum in one call: raw normalisation, a strike and the three envelopes,
+returning the waveform only. Everything else keeps its default, so this is just
+code::ar:: with the percussion arguments brought to the front.
+
+CODE::
+BlipSync.perc(strike, freq, decay, bend, damp, snap, tilt, maxfreq, minfreq, beater, mul, add)
+::
+
+STRONG::beater:: is link::#rotate::: it preserves the magnitude spectrum but
+spreads the impulse in time, so it drops the peak without changing the loudness.
+0 is a hard click, 0.22 a soft thud about 15 dB lower in peak.
+
 METHOD:: arSig
 As code::ar::, but returns only the waveform channel and accepts
 code::mul:: / code::add::.
@@ -350,6 +403,21 @@ s.boot;
 {
     var ph = Array.fill(4, { |i| Phasor.ar(0, (97 + (i * 5)) * SampleDur.ir, 0, 1) });
     Splay.ar(ph.collect { |p| BlipSync.ar(0, 6000, phase: p, track: 1, tilt: -2).at(0) }) * 0.2
+}.play
+)
+
+// 6g. a drum, in one UGen. No EnvGens, no trigger: it is born struck.
+(
+{ BlipSync.perc(freq: 46, decay: 0.45, bend: 4.2, damp: 600, snap: 0.045,
+                tilt: -6) * 0.12 ! 2 }.play
+)
+
+// 6h. the same struck in time. snap is the beater: 0.008 is a click, 0.06 a
+//     thump. Mouse X sweeps it.
+(
+{
+    BlipSync.perc(Impulse.ar(2), 46, 0.45, 4.2, 600, MouseX.kr(0.005, 0.08),
+                  tilt: -6) * 0.12 ! 2
 }.play
 )
 

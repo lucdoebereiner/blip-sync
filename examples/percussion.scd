@@ -2,17 +2,27 @@
     BlipSync -- percussion.
 
     A struck resonator is a spectrum whose high harmonics die faster than its
-    low ones. tilt weights harmonic k by r^(k-1), so an envelope sweeping tilt
-    downward IS that decay: w_k(t) = e^(-k*t/tau), the k-th harmonic dying k
-    times faster than the fundamental. A drum is a pitch envelope plus a tilt
-    envelope.
+    low ones. tilt weights harmonic k by r^(k-1), so sweeping tilt downward over
+    time IS that decay: w_k(t) = e^(-k*t/tau), the k-th harmonic dying k times
+    faster than the fundamental. A drum is a pitch envelope plus a tilt
+    envelope -- and both live inside the UGen, so it is one call:
 
-    The one thing you must change is normalize. Modes 0 and 1 hold the output
-    level up as the band collapses -- that is what they are for -- so the bright
-    impulse and the sine it turns into come out at the same peak and there is no
-    attack. normalize: 2 is raw: the fundamental sits at 1.0, so your gain is
-    the level of the body and the attack rises above it by however many
-    harmonics tilt opens at t=0.
+        BlipSync.perc(strike, freq, decay, bend, damp, snap, tilt,
+                      maxfreq, minfreq, beater, mul, add)
+
+        strike  trigger; restarts the envelopes and puts the impulse on the edge
+        decay   amplitude, seconds to fall 60 dB
+        bend    pitch multiplier at the strike, falling to freq
+        damp    dB/kHz of extra tilt by the end: the attack
+        snap    seconds for bend and damp to complete. THE beater control
+        tilt    where the spectrum sits once it has rung out
+        beater  rotate; spreads the impulse in time. 0 hard, 0.25 soft
+
+    perc uses normalize: 2 (raw), which is what makes any of it audible: the
+    other two modes are level-preserving by design, so a collapsing band stays
+    as loud as the sine it collapses into and there is no attack to be had. Raw
+    means your gain IS the level of the ringing body, and the attack rises above
+    it by however many harmonics the band opens at t=0.
 
     Evaluate one block at a time. cmd-period stops.
 */
@@ -21,122 +31,101 @@ s.boot;
 
 
 // ---------------------------------------------------------------------------
-// 0. HEAR THE PROBLEM.  The same patch under all three normalisations, no
-//    amplitude envelope at all -- everything you hear is the tilt envelope.
-//    Mode 0 barely moves. Mode 2 is already a drum.
+// 1. A KICK, in one UGen. No envelopes, no trigger -- it is born struck, so a
+//    one-shot synth just plays.
 // ---------------------------------------------------------------------------
 (
-var nm = 0;        // <- edit this: 0 peak, 1 rms, 2 raw, then re-evaluate
+{ BlipSync.perc(freq: 46, decay: 0.45, bend: 4.2, damp: 600, snap: 0.045,
+                tilt: -6) * 0.12 ! 2 }.play
+)
+
+
+// ---------------------------------------------------------------------------
+// 2. SNAP IS THE BEATER.  Mouse X from a click to a thump, live.
+// ---------------------------------------------------------------------------
+(
 {
-    var tr = Impulse.ar(2);
-    var f  = EnvGen.ar(Env([200, 47], [0.05], -6), tr);
-    var tl = EnvGen.ar(Env([0, -500], [0.035], -4), tr);
-    BlipSync.ar(f, 9000, tilt: tl, normalize: nm, sync: tr, syncMode: 0).at(0)
-        * [1, 0.15, 0.022][nm] ! 2
+    BlipSync.perc(Impulse.ar(2), 46, 0.45, 4.2, 600, MouseX.kr(0.004, 0.08),
+                  tilt: -6) * 0.12 ! 2
 }.play
 )
 
-// (normalize, like syncMode, iphase and track, is INIT RATE -- it has to be a
-//  literal, not a SynthDef argument.)
-
 
 // ---------------------------------------------------------------------------
-// 1. A KICK.  Gain is the body level; the attack is gain * W(tilt at t=0).
-//    tilt's starting value is the beater, where it lands is the ring.
+// 3. THE FOUR CONTROLS, one at a time. Play them and move one number.
 // ---------------------------------------------------------------------------
 (
-SynthDef(\bsKick, { |out = 0, amp = 0.12, f0 = 190, f1 = 46, pdrop = 0.055,
-                    open = -6, close = -600, snap = 0.04, rel = 0.42,
-                    beater = 0, top = 9000|
-    var tr  = Impulse.ar(0);
-    var env = EnvGen.ar(Env([1, 0], [rel], -4), doneAction: 2);
-    var f   = EnvGen.ar(Env([f0, f1], [pdrop], -7));
-    var tl  = EnvGen.ar(Env([open, close], [snap], -4));
-    var sig = BlipSync.ar(f, top, tilt: tl, normalize: 2, rotate: beater,
-                          sync: tr, syncMode: 0).at(0);
-    Out.ar(out, sig * env * amp ! 2)
+SynthDef(\bsPerc, { |out = 0, amp = 0.12, freq = 46, decay = 0.45, bend = 4.2,
+                    damp = 600, snap = 0.045, tilt = -6, beater = 0,
+                    top = 9000, lo = 0, pan = 0|
+    var sig = BlipSync.perc(Impulse.ar(0), freq, decay, bend, damp, snap,
+                            tilt, top, lo, beater);
+    DetectSilence.ar(sig, 0.0001, 0.05, doneAction: 2);
+    Out.ar(out, Pan2.ar(sig * amp, pan))
 }).add;
 )
 
-Synth(\bsKick);                                          // the plain one
-Synth(\bsKick, [\open, 0, \snap, 0.012, \amp, 0.02]);    // wide open = hard click
-Synth(\bsKick, [\beater, 0.22, \amp, 0.3]);              // rotate = soft beater
-Synth(\bsKick, [\close, -40, \amp, 0.08]);               // parks bright: it rings
-Synth(\bsKick, [\f0, 420, \f1, 38, \pdrop, 0.09, \rel, 0.8]);   // long 808 drop
+Synth(\bsPerc);                                            // the kick
+Synth(\bsPerc, [\snap, 0.006, \tilt, 0, \amp, 0.02]);      // wide open: a click
+Synth(\bsPerc, [\snap, 0.07, \beater, 0.22, \amp, 0.3]);   // soft beater
+Synth(\bsPerc, [\damp, 40, \amp, 0.05]);                   // barely damps: it rings
+Synth(\bsPerc, [\bend, 1, \amp, 0.12]);                    // no pitch drop
+Synth(\bsPerc, [\bend, 9, \decay, 0.9, \amp, 0.12]);       // long 808 drop
 
 
 // ---------------------------------------------------------------------------
-// 2. THE FAMILY.  Everything below is the same three envelopes with different
-//    numbers. Short + high + bright = a click; no pitch drop + a surviving
-//    band = a tom; minfreq lifted off the fundamental = a shell-ish rattle.
+// 4. THE FAMILY.  Same synth, different numbers.
+// ---------------------------------------------------------------------------
+Synth(\bsPerc, [\freq, 46,  \decay, 0.45, \bend, 4.2, \damp, 600, \snap, 0.045]);          // kick
+Synth(\bsPerc, [\freq, 150, \decay, 0.35, \bend, 2.0, \damp,  60, \snap, 0.03,
+                \tilt, -4, \amp, 0.07]);                                                   // tom
+Synth(\bsPerc, [\freq, 800, \decay, 0.08, \bend, 1.2, \damp, 120, \snap, 0.008,
+                \tilt, 0, \amp, 0.01]);                                                    // click
+Synth(\bsPerc, [\freq, 190, \decay, 0.5,  \bend, 1.0, \damp,  30, \snap, 0.15,
+                \lo, 1400, \tilt, -2, \amp, 0.02]);                                        // rattle
+
+
+// ---------------------------------------------------------------------------
+// 5. INTO THE CHAIN.  Resonant lowpass, then tanh. The band limit stays under
+//    the filter, so nothing folds before the distortion gets to it.
 // ---------------------------------------------------------------------------
 (
-SynthDef(\bsHit, { |out = 0, amp = 0.1, f0 = 190, f1 = 46, pdrop = 0.05,
-                   open = -6, close = -600, snap = 0.04, rel = 0.4, crv = -4,
-                   beater = 0, top = 12000, lo = 0, pan = 0|
+SynthDef(\bsPercChain, { |out = 0, amp = 0.6, drive = 3, freq = 44|
     var tr  = Impulse.ar(0);
-    var env = EnvGen.ar(Env([1, 0], [rel], crv), doneAction: 2);
-    var f   = EnvGen.ar(Env([f0, f1], [pdrop], -7));
-    var tl  = EnvGen.ar(Env([open, close], [snap], -4));
-    var sig = BlipSync.ar(f, top, lo, tilt: tl, normalize: 2, rotate: beater,
-                          sync: tr, syncMode: 0).at(0);
-    Out.ar(out, Pan2.ar(sig * env * amp, pan))
+    var cut = EnvGen.ar(Env([4000, 300], [0.05], -5), tr);
+    var sig = BlipSync.perc(tr, freq, 0.5, 4.5, 600, 0.05, -4, beater: 0.15) * 0.1;
+    var out_ = (RLPF.ar(sig, cut, 0.5) * drive).tanh * amp;
+    DetectSilence.ar(out_, 0.0001, 0.05, doneAction: 2);
+    Out.ar(out, out_ ! 2)
 }).add;
 )
 
-Synth(\bsHit, [\f0, 190, \f1, 46, \rel, 0.45]);                              // kick
-Synth(\bsHit, [\f0, 300, \f1, 150, \pdrop, 0.02, \close, -60, \rel, 0.35,
-               \amp, 0.05]);                                                  // tom
-Synth(\bsHit, [\f0, 900, \f1, 700, \pdrop, 0.01, \open, 0, \close, -120,
-               \snap, 0.01, \rel, 0.08, \amp, 0.01]);                         // click
-Synth(\bsHit, [\f0, 210, \f1, 190, \pdrop, 0.01, \lo, 1400, \open, -2,
-               \close, -30, \snap, 0.15, \rel, 0.5, \amp, 0.02]);             // rattle
+Synth(\bsPercChain);
 
 
 // ---------------------------------------------------------------------------
-// 3. INTO THE CHAIN.  Resonant lowpass swept with the tilt, then tanh. The
-//    band limit stays under the filter, so nothing folds before the distortion
-//    gets to it.
-// ---------------------------------------------------------------------------
-(
-SynthDef(\bsKickChain, { |out = 0, amp = 0.35, drive = 3|
-    var tr  = Impulse.ar(0);
-    var env = EnvGen.ar(Env([1, 0], [0.5], -4), doneAction: 2);
-    var f   = EnvGen.ar(Env([200, 44], [0.06], -7));
-    var tl  = EnvGen.ar(Env([-4, -600], [0.05], -4));
-    var cut = EnvGen.ar(Env([4000, 300], [0.05], -5));
-    var sig = BlipSync.ar(f, 9000, tilt: tl, normalize: 2, rotate: 0.15,
-                          sync: tr, syncMode: 0).at(0) * env * 0.1;
-    Out.ar(out, ((RLPF.ar(sig, cut, 0.5) * drive).tanh * amp) ! 2)
-}).add;
-)
-
-Synth(\bsKickChain);
-
-
-// ---------------------------------------------------------------------------
-// 4. A PATTERN, so you can hear it in time.
+// 6. A PATTERN.
 // ---------------------------------------------------------------------------
 (
 Pbind(
-    \instrument, \bsHit,
+    \instrument, \bsPerc,
     \dur,    Pseq([0.5, 0.25, 0.25, 0.5, 0.25, 0.25], inf),
-    \f0,     Pseq([190, 190, 300, 190, 900, 300], inf),
-    \f1,     Pseq([ 46,  46, 150,  46, 700, 150], inf),
-    \pdrop,  Pseq([0.055, 0.055, 0.02, 0.055, 0.01, 0.02], inf),
-    \close,  Pseq([-600, -600, -60, -600, -120, -60], inf),
-    \rel,    Pseq([0.45, 0.3, 0.35, 0.45, 0.08, 0.35], inf),
-    \amp,    Pseq([0.12, 0.05, 0.05, 0.12, 0.012, 0.05], inf),
+    \freq,   Pseq([ 46,  46, 150,  46, 800, 150], inf),
+    \decay,  Pseq([0.45, 0.35, 0.35, 0.45, 0.08, 0.35], inf),
+    \bend,   Pseq([4.2, 4.2, 2.0, 4.2, 1.2, 2.0], inf),
+    \damp,   Pseq([600, 600,  60, 600, 120,  60], inf),
+    \snap,   Pwhite(0.02, 0.05),
     \beater, Pwhite(0.0, 0.18),
+    \amp,    Pseq([0.12, 0.05, 0.05, 0.12, 0.01, 0.05], inf),
     \pan,    Pseq([0, -0.3, 0.3, 0, 0.5, -0.4], inf)
 ).play
 )
 
 
 // ---------------------------------------------------------------------------
-// 5. PERCUSSION ON A PHASE NETWORK.  The drums are BlipSyncs, so a PhaseLock
-//    tree can clock them: one conductor, voices locked at whole ratios, each
-//    with its own tilt envelope retriggered by its own phase wrap.
+// 7. DRUMS ON A PHASE NETWORK.  strike takes any trigger, so a PhaseLock tree
+//    can clock them: one conductor, voices locked at whole ratios, each struck
+//    by its own phase wrap.
 // ---------------------------------------------------------------------------
 (
 {
@@ -144,14 +133,13 @@ Pbind(
     var master = Phasor.ar(0, cf * SampleDur.ir, 0, 1);
     var ph = PhaseLock.ar(master, cf * ratios, 3, ratios: ratios,
                           iphases: [0, 0.25, 0.5, 0.75]);
-    var f0 = [190, 300, 520, 900], f1 = [46, 150, 380, 760];
+    var freq  = [46, 150, 380, 800];
+    var decay = [0.45, 0.3, 0.12, 0.06];
+    var snap  = [0.045, 0.03, 0.012, 0.008];
+    var amp   = [0.12, 0.05, 0.02, 0.008];
     Splay.ar(Array.fill(4, { |i|
-        var trig = Trig1.ar(HPZ1.ar(ph[i]) < -0.25, SampleDur.ir);  // the wrap
-        var env  = EnvGen.ar(Env([1, 0], [[0.45, 0.3, 0.12, 0.06][i]], -4), trig);
-        var f    = EnvGen.ar(Env([f0[i], f1[i]], [[0.055, 0.02, 0.012, 0.008][i]], -7), trig);
-        var tl   = EnvGen.ar(Env([-6, -600], [0.04], -4), trig);
-        BlipSync.ar(f, 9000, tilt: tl, normalize: 2, sync: trig, syncMode: 0).at(0)
-            * env * [0.12, 0.05, 0.02, 0.008][i]
+        var trig = Trig1.ar(HPZ1.ar(ph[i]) < -0.25, SampleDur.ir);
+        BlipSync.perc(trig, freq[i], decay[i], 4.2, 600, snap[i], -6) * amp[i]
     })) * 0.8
 }.play
 )

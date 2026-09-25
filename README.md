@@ -7,7 +7,11 @@ input and an output.
 
 ```
 [ sig, phase ] = BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
-                             syncMode, iphase, normalize, rotate, tilt, track)
+                             syncMode, iphase, normalize, rotate, tilt, track,
+                             strike, decay, bend, damp, snap)
+
+         sig  = BlipSync.perc(strike, freq, decay, bend, damp, snap, tilt,
+                              maxfreq, minfreq, beater, mul, add)
 ```
 
 Plus `PhaseLock`, a bank of phase-locked oscillators that emits phase ramps for
@@ -337,27 +341,39 @@ envelope at all), peak per 4 ms block relative to the settled body:
 | 1 rms | 15.8 | −0.5 | −1.5 | −2.5 | −0.9 | 0.0 | +15.8 dB |
 | 2 raw | 32.1 | −0.7 | −1.7 | −2.5 | −0.9 | 0.0 | **+32.1 dB** |
 
-With `normalize: 2` the whole envelope is already in the spectrum — the second
-row of that table needs no amplitude envelope to be a drum. Practical
-consequences:
+With `normalize: 2` the whole envelope is already in the spectrum — the third
+row of that table needs no amplitude envelope to be a drum.
 
+Both envelopes live in the UGen, so none of this needs an `EnvGen`:
+
+```supercollider
+BlipSync.perc(freq: 46, decay: 0.45, bend: 4.2, damp: 600, snap: 0.045, tilt: -6) * 0.12
+```
+
+- **`strike`** restarts both envelopes and puts the impulse on the edge itself,
+  sub-sample accurate (landing two samples later, like `sync`). The UGen is
+  **born struck**, so a one-shot synth needs no trigger at all — the line above
+  plays a kick as it stands.
+- **`snap`** is the beater, and the most useful of the four: how long `bend` and
+  `damp` take. 0.006 s is a click, 0.07 s a thump.
+- **`damp`** is the attack: dB/kHz of extra tilt reached by the end, so the
+  spectrum starts at `tilt` and darkens to `tilt − damp` as it rings. Measured
+  +32.0 dB of attack over the body at `damp: 600`.
+- **`bend`** is the pitch multiplier at the strike, falling to `freq`.
+- **`decay`** is the amplitude T60 — measured 0.97 s for `decay: 1.0`. `0` means
+  no amplitude envelope at all.
+- **`rotate`** (`beater` in `perc`) is beater hardness. It preserves the
+  magnitude spectrum but spreads the impulse in time, so it drops the peak
+  without touching the loudness: 0 is a hard click, 0.22 a soft thud ~15 dB
+  lower in peak.
 - **Your output gain is the body level.** The fundamental's weight is 1 by
   definition, so `* 0.12` means a body at 0.12 and an attack at
   `0.12 × W(tilt at t=0)`.
-- **`tilt` at t=0 sets how hard the attack is.** Starting at 0 opens the whole
-  band (`W = maxfreq/freq`, +32 dB); starting around −6 dB/kHz at a 190 Hz
-  fundamental gives about +16 dB. Holding it open for the first few ms before
-  the collapse turns a thump into a click.
-- **Where `tilt` lands sets the ring.** Park it at −600 and the body is a pure
-  sine; park it at −40 and a couple of harmonics survive.
-- **`rotate` is beater hardness.** It preserves the magnitude spectrum but
-  spreads the impulse in time, so it drops the peak without touching the
-  loudness: 0 is a hard click, 0.22 is a soft thud ~15 dB lower in peak.
-- **Retrigger with `sync`.** `sync: trig, syncMode: 0` resets the phase so the
-  impulse lands exactly on the trigger rather than wherever the oscillator
-  happened to be.
 
-`examples/percussion.scd` has the worked patches.
+All five are inert at their defaults and the arithmetic then reduces to an exact
+multiply by 1 or add of 0, so the nine deterministic tests stay bit-identical.
+`decay` and `snap` are read once per block — they set a rate of change, not a
+value. `examples/percussion.scd` has the worked patches.
 
 ### Hard sync
 
