@@ -14,12 +14,19 @@ input and an output.
                               maxfreq, beater, minfreq, mul, add)
 ```
 
-Plus `PhaseLock`, a bank of phase-locked oscillators that emits phase ramps for
-BlipSync to read — see [section 4](#4-phaselock-a-chainable-pll-bank).
+Plus two companions:
 
 ```
 phases = PhaseLock.ar(master, freqs, k, mutual, ratios, subs, iphases)
+
+   sig = PulsarBlip.ar(trig, freq, decay, damp, bend, tilt, rotate,
+                       maxfreq, minfreq, numVoices, trigMode)
 ```
+
+`PhaseLock` is a bank of phase-locked oscillators emitting phase ramps for
+BlipSync to read — [section 4](#4-phaselock-a-chainable-pll-bank). `PulsarBlip`
+is a polyphonic pulsar generator on the same kernel, where grains overlap
+instead of replacing one another — [section 5](#5-pulsarblip-polyphonic-pulsar-synthesis).
 
 Complete worked patches, from one oscillator to a three-level hierarchy, are in
 [`examples/phase-networks.scd`](examples/phase-networks.scd).
@@ -575,7 +582,66 @@ each node has a definite phase that its children follow, so a group holds
 together even while its node drifts; in a mean field a group's phase is only the
 average of its members and has no independent existence.
 
-## 5. Cost
+## 5. `PulsarBlip`: polyphonic pulsar synthesis
+
+One BlipSync is a *monophonic* pulsar generator: a strike replaces the ringing
+grain rather than layering on it, because there is only one phase. `PulsarBlip`
+gives each grain its own voice.
+
+```
+emission rate   the trigger            pitch above ~20 Hz, rhythm below
+pulsaret freq   freq                   a formant, NOT the pitch
+pulsaret dur    decay                  blips per grain ≈ decay × freq
+pulsaret shape  maxfreq, tilt, damp, rotate
+duty cycle      decay × emission rate  above 1 the grains overlap
+```
+
+The two rates are independent, which is the point of the model — and it is
+exactly the thing that makes a single BlipSync confusing, where `freq` is both
+at once. Measured: sweeping the emission rate 4 → 200 Hz with `freq` fixed at
+600, the pitch climbs thirty-fold through the rhythm/pitch boundary while the
+spectral centroid stays at **3110 Hz** (3106 / 3106 / 3113 / 3325 across the
+sweep).
+
+Overlap, emission 20 Hz against 0.6 s grains:
+
+| numVoices | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| rms vs one voice | +0.0 | +3.9 | +6.3 | +7.1 | +7.2 dB |
+
+It saturates at 8 because by then the oldest grain is 40 dB down.
+
+Two things it does that *n* separate oscillators cannot:
+
+**Every parameter is snapshot at the moment a grain is born**, so noise on
+`freq` or `rotate` scatters the cloud instead of bending all of it together.
+`maxfreq` and `minfreq` stay live, because they are the anti-aliasing limit and
+belong to the sample rate rather than to a grain.
+
+**The onset is band-matched.** A grain would otherwise start with its amplitude
+stepping 0 → 1 at the exact instant the blip is at its peak — a discontinuity,
+therefore broadband. Instead the phase starts a little early and a raised cosine
+of the same length brings the amplitude up, so the impulse arrives precisely as
+the window reaches 1. The length is two periods of `maxfreq`, the only timescale
+the waveform has. Against an 8× oversampled render:
+
+| | aliasing |
+|---|---|
+| round-robin of BlipSync voices (stepped onset) | −24.8 dB |
+| PulsarBlip (band-matched onset) | **−61.4 dB** |
+
+One trap worth recording: that window must be a *duration*, never a sample
+count. Rounding it to samples makes each grain's onset time depend on the sample
+rate, shifting every grain by a few microseconds — and for impulses this narrow,
+a few microseconds is a large error. It measured **46 dB worse** and looked at
+first like the whole idea had failed.
+
+Grains are independent, so nothing here needs the pitch to be an integer
+multiple of the emission rate. That constraint belongs to BlipSync's `sync`,
+where one phase is being reset rather than a new voice started.
+`examples/pulsar.scd` has the patches.
+
+## 6. Cost
 
 At 48 kHz, per voice, one core:
 
@@ -591,7 +657,7 @@ sample and costs the same as the audio-rate row.
 Independent of how many harmonics are in the band — 2 Hz with 10 000 harmonics
 costs the same as 2 kHz with 5.
 
-## 6. Verifying it yourself
+## 7. Verifying it yourself
 
 ```sh
 cd test

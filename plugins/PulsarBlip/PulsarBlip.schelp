@@ -1,0 +1,136 @@
+CLASS:: PulsarBlip
+SUMMARY:: Polyphonic pulsar generator built on the BlipSync kernel
+CATEGORIES:: UGens>Generators>Granular
+RELATED:: Classes/BlipSync, Classes/PhaseLock
+
+DESCRIPTION::
+
+Each trigger starts a GRAIN on one of STRONG::numVoices:: internal voices. A
+grain is a band-limited blip train at STRONG::freq::, decaying in amplitude over
+STRONG::decay:: and in brightness over STRONG::damp::. Because every voice has
+its own phase and its own copy of every parameter, grains OVERLAP instead of
+replacing one another, and each keeps the settings it was born with.
+
+That is pulsar synthesis in its usual terms:
+
+TELETYPE::
+    emission rate   the trigger            pitch above ~20 Hz, rhythm below
+    pulsaret freq   freq                   a FORMANT, not the pitch
+    pulsaret dur    decay                  blips per grain ~= decay * freq
+    pulsaret shape  maxfreq, tilt, damp, rotate
+    duty cycle      decay * emission rate  greater than 1 means grains overlap
+::
+
+The two rates are independent, which is the whole point of the model: sweep the
+emission rate from 4 Hz to 200 Hz with STRONG::freq:: fixed and the pitch climbs
+thirty-fold through the rhythm/pitch boundary while the formant does not move
+(measured: spectral centroid constant at 3110 Hz across that sweep).
+
+STRONG::Two things this does that separate oscillators cannot::
+
+Every parameter is SNAPSHOT when a grain is born, so modulating STRONG::freq::
+or STRONG::rotate:: scatters the cloud instead of bending all of it together.
+Feed them noise at audio rate and each grain takes its own value.
+
+The onset is BAND-MATCHED. A grain would otherwise start with its amplitude
+stepping 0 to 1 at the exact instant the blip is at its peak, which is a
+discontinuity and therefore broadband. Instead the phase starts a little early
+and a raised cosine of the same length brings the amplitude up, so the impulse
+arrives precisely as the window reaches 1. The length is two periods of
+STRONG::maxfreq::, the only timescale the waveform has. Measured against an 8x
+oversampled render, this is code::-61.4 dB:: against code::-24.8 dB:: for the
+same texture built from a round-robin of link::Classes/BlipSync:: voices.
+
+NOTE::
+The window is a duration, never a sample count. Rounding it to samples makes the
+grain's onset time depend on the sample rate, which shifts every grain by a few
+microseconds -- and for impulses this narrow, a few microseconds is a large
+error. It measured 46 dB worse.
+::
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+ARGUMENT:: trig
+Emission trigger; each rising crossing of zero starts a grain. Under
+code::trigMode: 1:: this is a 0..1 phase ramp instead -- a link::Classes/Phasor::,
+a link::Classes/PhaseLock:: output -- and a grain starts on every wrap.
+
+ARGUMENT:: freq
+Pulsaret frequency: the blip rate INSIDE a grain, which is a formant, not the
+pitch. Snapshot per grain.
+
+ARGUMENT:: decay
+Grain duration, seconds to fall 60 dB. Snapshot per grain. Blips per grain is
+about code::decay * freq::, so code::decay <= 1/freq:: gives a single blip and
+there is no separate mode for it.
+
+ARGUMENT:: damp
+Seconds for the grain's spectrum to fall from STRONG::tilt:: to a sine. Short is
+a click, long stays bright. Snapshot per grain.
+
+ARGUMENT:: bend
+Pitch multiplier at the onset, falling to STRONG::freq:: over STRONG::damp::.
+Snapshot per grain.
+
+ARGUMENT:: tilt
+Spectral slope at the onset in dB per kHz. Snapshot per grain.
+
+ARGUMENT:: rotate
+Impulse asymmetry in cycles; 0.25 is the Hilbert transform. Snapshot per grain.
+
+ARGUMENT:: maxfreq
+Band limit in Hz. LIVE, not snapshot: it is the anti-aliasing limit and has to
+follow the sample rate rather than the grain. It also sets the impulse width
+(about code::0.6/maxfreq::) and the length of the onset window.
+
+ARGUMENT:: minfreq
+Bottom of the harmonic band. LIVE.
+
+ARGUMENT:: numVoices
+How many grains may sound at once, up to 64. When they are all busy the quietest
+is stolen. Inactive voices cost nothing, and a voice whose shaping envelopes have
+finished stops rebuilding its band, so a long ring-out is cheap. INIT RATE.
+
+ARGUMENT:: trigMode
+0: STRONG::trig:: is a trigger. 1: it is a 0..1 phase ramp and a grain starts on
+the wrap. INIT RATE.
+
+EXAMPLES::
+
+Complete patches are in code::examples/pulsar.scd:: in the source tree.
+
+CODE::
+s.boot;
+
+// the pulsar demonstration: the emission rate sweeps from rhythm into pitch
+// while the formant stays exactly where it is
+(
+{ PulsarBlip.ar(Impulse.ar(XLine.ar(4, 200, 12)), 600, 0.035, 0.02,
+                numVoices: 16) * 0.03 ! 2 }.play
+)
+
+// a cloud: irregular emission, and freq is snapshot per grain, so every grain
+// has its own pitch
+(
+{
+    PulsarBlip.ar(Dust.ar(40), LFNoise0.ar(200).exprange(120, 1600), 0.25, 0.04,
+                  rotate: LFNoise0.ar(200).range(0, 0.3), numVoices: 24) * 0.02 ! 2
+}.play
+)
+::
+
+STRONG::Notes::
+
+LIST::
+## Normalisation is raw, so a grain's fundamental sits at 1.0 and its peak is the
+harmonic count; overlapping grains add. Scale with code::mul::, and remember the
+worst case is all voices sounding at once.
+## code::decay:: is clamped to a minimum of 0.5 ms, because a voice that cannot
+decay can never be freed.
+## Grains are independent of each other, so nothing here needs the pitch to be an
+integer multiple of the emission rate -- that constraint belongs to
+link::Classes/BlipSync::'s sync, where one phase is being reset rather than a new
+voice started.
+::

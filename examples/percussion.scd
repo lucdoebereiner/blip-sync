@@ -128,7 +128,9 @@ Pbind(
     var master = Phasor.ar(0, cf * SampleDur.ir, 0, 1);
     var ph = PhaseLock.ar(master, cf * ratios, 3, ratios: ratios,
                           iphases: [0, 0.25, 0.5, 0.75]);
-    var freq  = [46, 150, 380, 800];
+    // each pitch is a whole multiple of its own voice's strike rate
+    // (cf * ratios = 2.4, 4.8, 7.2, 12 Hz), so the phase reset is a no-op
+    var freq  = [19, 31, 53, 67] * (cf * ratios);
     var decay = [0.45, 0.3, 0.12, 0.06];
     var damp  = [0.045, 0.03, 0.012, 0.008];
     var amp   = [0.12, 0.05, 0.02, 0.008];
