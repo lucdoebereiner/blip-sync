@@ -109,6 +109,28 @@ then IS the level of the ringing body, and the attack rises above it by however
 many harmonics the tilt envelope opens up.
 
 ARGUMENT:: rotate
+NOTE::
+code::rotate:: cannot give you a fast attack and a slow decay. Rotating every
+harmonic by the same angle multiplies the analytic signal by exp(i*phi), which
+turns the carrier inside the envelope but leaves STRONG::|z(t)|:: -- the
+temporal envelope -- exactly where it was. Measured: the envelope is identical
+to within -143 dB across code::rotate:: 0, 0.125, 0.25 and 0.5. What it does
+change is the crest factor, and in the direction of a SOFTER attack: the peak
+falls from 7.73 to 4.13 (-5.4 dB) between code::rotate: 0:: and code::0.25::.
+
+For a sharper attack, narrow the impulse instead -- raise STRONG::maxfreq:: and
+flatten STRONG::tilt::. The two work together: at code::tilt: -6:: and a 200 Hz
+fundamental the width saturates around 100 us however high STRONG::maxfreq::
+goes, because the tilt has already rolled the harmonics off. At code::tilt: 0::
+the width really is about code::0.6/maxfreq::.
+
+For an asymmetric ENVELOPE -- quick attack, long decay -- put a resonant filter
+after it. That is what a resonator's impulse response is, and it is the natural
+division of labour: the blip is the strike, the filter is the body. Measured
+with code::RLPF:: at 200 Hz, the ring falls 60 dB in 42.8 / 110.4 / 563.7 ms at
+code::rq:: 0.5 / 0.1 / 0.02.
+::
+
 Constant phase rotation applied to every harmonic, in CYCLES. Not the same as
 STRONG::phase::, which rotates harmonic k by k times the angle and is therefore
 only a time shift; this rotates them all by the SAME angle, which makes the
