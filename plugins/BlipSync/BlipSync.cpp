@@ -35,16 +35,33 @@ enum {
     kRotate,
     kTilt,
     kTrack,  // init-rate: 0 = band width from freq, 1 = from total phase velocity
-    // --- percussion: a strike and the three envelopes it fires. Every one of
-    // these is inert at its default, and the arithmetic then reduces to an
-    // exact multiply by 1 or add of 0, so the untouched UGen stays bit-exact.
-    kStrike, // trigger: restart the envelopes and put the impulse on the edge
+    // --- percussion: two times and a pitch multiplier. There is no strike
+    // input because sync already is one -- it takes a trigger and resets the
+    // phase sub-sample accurately, which is exactly what striking a drum means
+    // -- so any sync event restarts these. The unit is also born struck, so a
+    // synth-per-note needs no trigger at all. All three are inert at their
+    // defaults and the arithmetic then reduces to an exact multiply by 1 or
+    // subtract of 0, so the untouched UGen stays bit-exact.
     kDecay,  // amplitude, seconds to fall 60 dB. 0 = no amplitude envelope
     kBend,   // pitch multiplier at the strike. 1 = no pitch envelope
-    kDamp,   // dB/kHz of extra tilt reached by the end. 0 = no tilt envelope
-    kSnap,   // seconds for bend and damp to travel 99% of the way
+    kDamp,   // seconds for the spectrum to collapse from tilt to a sine, and
+             // for bend to land. 0 = no strike shaping at all
     kNumInputs
 };
+
+// How far below `tilt` the spectrum is driven as it rings: enough that the
+// second harmonic is 60 dB under the fundamental, which is a sine for any
+// purpose. Scale-free, so it needs no parameter -- and a long kDamp means the
+// spectrum never gets there, which is how a ring stays bright.
+//
+// The trip is made LINEARLY in time, not exponentially: tilt is proportional to
+// ln r, and a modal decay is w_k(t) = r^k = e^(-k*t/tau), so ln r falls at a
+// constant rate. Done exponentially, most of the collapse happens in the first
+// tenth of kDamp and the parameter does not mean what its name says.
+static inline double dampTarget(double freq) {
+    const double f = std::fabs(freq);
+    return 60000.0 / (f > 1.0 ? f : 1.0);
+}
 
 // Coefficient of a one-pole decay covering lnFrac of its travel in t seconds.
 // Both envelopes are exponential because that is what a struck resonator does,
@@ -79,8 +96,7 @@ struct BlipSync : public Unit {
     double m_freq, m_maxfreq, m_minfreq, m_phaseoff, m_syncphase;
     double m_rotate, m_tilt;
     double m_syncPrev;
-    double m_strikePrev;
-    double m_ampEnv, m_bendEnv;
+    double m_ampEnv, m_bendEnv, m_tiltEnv;
     double m_bend, m_damp;
     double m_poffPrev;
     double m_trackVel, m_trackCoef;
@@ -151,16 +167,15 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
     // which is the usual trigger semantics.
     const float* syncBuf = (INRATE(kSync) == calc_FullRate) ? IN(kSync) : nullptr;
     const double syncK = (double)IN0(kSync);
-    const float* strikeBuf = (INRATE(kStrike) == calc_FullRate) ? IN(kStrike) : nullptr;
-    const double strikeK = (double)IN0(kStrike);
-
     // Envelope times are read once per block. They set a rate of change, not a
     // value, so smearing them across a block would be meaningless, and the exp()
     // they cost belongs outside the sample loop.
+    const bool shaped = (double)IN0(kDamp) > 0.0;
     const double ampCoef = decayCoef((double)IN0(kDecay), unit->m_sampleDur,
                                      -6.907755278982137, 1.0); // 60 dB; 0 = off
-    const double envCoef = decayCoef((double)IN0(kSnap), unit->m_sampleDur,
-                                     -4.605170185988091, 0.0); // 99%; 0 = instant
+    const double envCoef = decayCoef((double)IN0(kDamp), unit->m_sampleDur,
+                                     -6.907755278982137, 0.0); // pitch: 60 dB; 0 = off
+    const double tiltStep = shaped ? unit->m_sampleDur / (double)IN0(kDamp) : 0.0;
 
     const bool track = unit->m_track;
 
@@ -169,8 +184,7 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
     // Tracking makes the band depend on the phase input too, so then that input
     // has to be standing still as well.
     // A moving bend or damp envelope moves the band with it.
-    const bool percStatic = bd.constant() && dm.constant()
-        && (double)IN0(kBend) == 1.0 && (double)IN0(kDamp) == 0.0;
+    const bool percStatic = !shaped && bd.constant() && dm.constant();
     const bool staticBand = unit->m_bandValid && fr.constant() && mx.constant() && mn.constant()
         && tl.constant() && percStatic && (!track || po.constant());
 
@@ -183,9 +197,9 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
 
     double phase = unit->m_phase;
     double syncPrev = unit->m_syncPrev;
-    double strikePrev = unit->m_strikePrev;
     double ampEnv = unit->m_ampEnv;
     double bendEnv = unit->m_bendEnv;
+    double tiltEnv = unit->m_tiltEnv;
     double poffPrev = unit->m_poffPrev;
     double trackVel = unit->m_trackVel;
     bool trackInit = unit->m_trackInit;
@@ -199,29 +213,48 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         const double minf = mn.next();
         const double poff = po.next();
         const double sval = syncBuf ? (double)syncBuf[i] : syncK;
-        const double stval = strikeBuf ? (double)strikeBuf[i] : strikeK;
         const double starget = sp.next();
         const double rot = ro.next();
         const double tiltIn = tl.next();
         const double bend = bd.next();
-        const double damp = dm.next();
+        dm.next();
 
-        // --- the strike, detected before anything reads the envelopes -------
-        bool struck = false;
-        double sd = 0.0;
-        if (strikePrev <= 0.0 && stval > 0.0) {
-            struck = true;
-            const double den = stval - strikePrev;
-            sd = den > 0.0 ? (-strikePrev / den) : 0.0;
+        // --- sync edge detection, with the sub-sample crossing position -----
+        // Done here rather than further down because a sync event is also the
+        // strike, and the envelopes have to be restarted before anything reads
+        // them.
+        bool fired = false;
+        double d = 0.0;
+        if (syncMode == 0) {
+            // trigger: rising crossing of zero
+            if (syncPrev <= 0.0 && sval > 0.0) {
+                fired = true;
+                const double den = sval - syncPrev;
+                d = den > 0.0 ? (-syncPrev / den) : 0.0;
+            }
+        } else {
+            // phase ramp master (0..1): a downward jump is the period wrap.
+            // For a linear ramp this recovers the crossing time exactly.
+            if (sval < syncPrev - 0.5) {
+                fired = true;
+                const double den = sval + 1.0 - syncPrev;
+                d = den > 1.0e-12 ? (1.0 - syncPrev) / den : 0.0;
+            }
+        }
+        syncPrev = sval;
+        if (d < 0.0) d = 0.0;
+        if (d > 1.0) d = 1.0;
+        if (fired) {
             ampEnv = 1.0;
             bendEnv = 1.0;
+            tiltEnv = 1.0;
         }
-        strikePrev = stval;
 
-        // bend rides the envelope down to freq; damp rides it the other way, so
-        // the spectrum starts at tilt and darkens to tilt - damp as it rings.
-        const double freq = freqIn * (1.0 + ((bend - 1.0) * bendEnv));
-        const double tilt = tiltIn - (damp * (1.0 - bendEnv));
+        // bend rides the envelope down to freq; the spectrum starts at tilt and
+        // darkens from there as the same envelope falls.
+        const double be = shaped ? bendEnv : 0.0;
+        const double freq = freqIn * (1.0 + ((bend - 1.0) * be));
+        const double tilt = tiltIn - (shaped ? dampTarget(freqIn) * (1.0 - tiltEnv) : 0.0);
 
         // How fast the waveform is actually being read: freq plus whatever the
         // phase input is doing. Differencing poff rather than the total phase
@@ -265,36 +298,6 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         };
 
         const double inc = freq * sampleDur;
-
-        // --- sync edge detection, with the sub-sample crossing position ----
-        bool fired = false;
-        double d = 0.0;
-        if (syncMode == 0) {
-            // trigger: rising crossing of zero
-            if (syncPrev <= 0.0 && sval > 0.0) {
-                fired = true;
-                const double den = sval - syncPrev;
-                d = den > 0.0 ? (-syncPrev / den) : 0.0;
-            }
-        } else {
-            // phase ramp master (0..1): a downward jump is the period wrap.
-            // For a linear ramp this recovers the crossing time exactly.
-            if (sval < syncPrev - 0.5) {
-                fired = true;
-                const double den = sval + 1.0 - syncPrev;
-                d = den > 1.0e-12 ? (1.0 - syncPrev) / den : 0.0;
-            }
-        }
-        syncPrev = sval;
-        // A strike lands the impulse on its own edge. If sync fired on the same
-        // sample it already owns the reset, so leave that one alone.
-        if (struck && !fired) {
-            fired = true;
-            d = sd;
-        }
-        if (d < 0.0) d = 0.0;
-        if (d > 1.0) d = 1.0;
-
         const double ph = phase + poff;
         double y = ev(ph);
 
@@ -323,6 +326,9 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
 
         ampEnv *= ampCoef;
         bendEnv *= envCoef;
+        tiltEnv -= tiltStep;
+        if (tiltEnv < 0.0)
+            tiltEnv = 0.0;
     }
 
     if (!std::isfinite(phase))
@@ -335,12 +341,14 @@ void BlipSync_next(BlipSync* unit, int inNumSamples) {
         ampEnv = 0.0;
     if (!std::isfinite(bendEnv))
         bendEnv = 0.0;
+    if (!std::isfinite(tiltEnv))
+        tiltEnv = 0.0;
 
     unit->m_phase = phase;
     unit->m_syncPrev = syncPrev;
-    unit->m_strikePrev = strikePrev;
     unit->m_ampEnv = ampEnv;
     unit->m_bendEnv = bendEnv;
+    unit->m_tiltEnv = tiltEnv;
     unit->m_poffPrev = poffPrev;
     unit->m_trackVel = trackVel;
     unit->m_trackInit = trackInit;
@@ -378,13 +386,13 @@ void BlipSync_Ctor(BlipSync* unit) {
     unit->m_trackCoef = 1.0 - std::exp(-1.0 / (kTrackTau * unit->m_sampleRate));
     unit->m_syncphase = (double)IN0(kSyncPhase);
     unit->m_syncPrev = (double)IN0(kSync);
-    unit->m_strikePrev = (double)IN0(kStrike);
     unit->m_bend = (double)IN0(kBend);
     unit->m_damp = (double)IN0(kDamp);
     // Struck at birth, so a one-shot synth needs no trigger at all: just give
     // it a decay and it fires once when it starts.
     unit->m_ampEnv = 1.0;
     unit->m_bendEnv = 1.0;
+    unit->m_tiltEnv = 1.0;
     unit->m_rotate = (double)IN0(kRotate);
     unit->m_tilt = (double)IN0(kTilt);
     unit->m_blep0 = 0.0;
@@ -396,15 +404,14 @@ void BlipSync_Ctor(BlipSync* unit) {
     // Emit one sample, then rewind the state the way Blip does.
     const double savedPhase = unit->m_phase;
     const double savedSync = unit->m_syncPrev;
-    const double savedStrike = unit->m_strikePrev;
     const double savedPoff = unit->m_poffPrev;
     BlipSync_next(unit, 1);
     unit->m_phase = savedPhase;
     unit->m_syncPrev = savedSync;
-    unit->m_strikePrev = savedStrike;
     unit->m_poffPrev = savedPoff;
     unit->m_ampEnv = 1.0;
     unit->m_bendEnv = 1.0;
+    unit->m_tiltEnv = 1.0;
     unit->m_trackVel = 0.0;
     unit->m_trackInit = false;
     unit->m_blep0 = 0.0;

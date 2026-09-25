@@ -180,47 +180,65 @@ A struck resonator is a spectrum whose high harmonics die faster than its low
 ones, and STRONG::tilt:: already says exactly that: weighting harmonic k by
 r^(k-1) and sweeping r down over time is w_k(t) = e^(-k*t/tau), the k-th
 harmonic dying k times faster than the fundamental. So a drum is a pitch
-envelope plus a tilt envelope, and these four arguments put both inside the
-UGen, fired by a STRONG::strike::. All of them are inert at their defaults.
+envelope plus a tilt envelope, and these three arguments put both inside the
+UGen. All three are inert at their defaults.
+
+There is no separate strike input, because STRONG::sync:: already is one: it
+takes a trigger, or a 0..1 phase ramp under code::syncMode: 1::, and resets the
+phase sub-sample accurately, which is what striking a drum means. Any sync event
+restarts these envelopes. The UGen is also born struck, so a synth-per-note
+needs no trigger at all.
+
+The AMOUNTS are all parameters that already exist: STRONG::tilt:: is how bright
+the strike is, STRONG::maxfreq:: is how far that brightness reaches,
+STRONG::rotate:: is the hardness of the beater, and the damp/decay ratio is how
+bright the ring stays. Only the times are new.
 
 Percussion wants code::normalize: 2::. Modes 0 and 1 are level-preserving by
 design, so the band collapsing under STRONG::damp:: stays as loud as the sine it
 collapses into and there is no attack to be had -- see link::#normalize::.
 
-ARGUMENT:: strike
-Trigger. On a rising crossing of zero it restarts both envelopes and puts the
-impulse on the edge itself, using the same sub-sample crossing estimate as
-STRONG::sync:: (and landing, like it, two samples later). The UGen is born
-struck, so a one-shot synth needs no trigger at all: give it a
-STRONG::decay:: and it fires once when it starts.
-
 ARGUMENT:: decay
-Amplitude envelope: seconds to fall 60 dB. code::0:: (the default) means no
-amplitude envelope at all. Read once per block.
+Amplitude envelope: seconds to fall 60 dB. Measured 0.97 s for code::decay: 1.0::.
+code::0:: (the default) means no amplitude envelope at all. Read once per block.
 
 ARGUMENT:: bend
-Pitch multiplier at the strike, falling to STRONG::freq::. code::4:: starts two
-octaves up. code::1:: is no pitch envelope.
+Pitch multiplier at the strike, falling exponentially to STRONG::freq:: over
+STRONG::damp::. code::4:: starts two octaves up; code::1:: is no pitch envelope.
 
 ARGUMENT:: damp
-dB per kHz of EXTRA tilt reached by the end of the strike: the spectrum starts
-at STRONG::tilt:: and darkens to code::tilt - damp:: as it rings. This is the
-attack -- the whole envelope of a drum is already in here, which is why the
-second-to-last row of the table under link::#normalize:: needs no amplitude
-envelope to be a drum. code::0:: is no tilt envelope.
-
-ARGUMENT:: snap
-Seconds for STRONG::bend:: and STRONG::damp:: to travel 99% of the way. Short is
-a click, long is a thump; it is the single most useful control of the four.
+Seconds for the spectrum to fall from STRONG::tilt:: to a sine, and for
+STRONG::bend:: to land. code::0:: (the default) is no strike shaping at all.
 Read once per block.
 
+This is the one shape control, and the most useful of the three: 0.004 s is a
+click, 0.09 s a thump, and a STRONG::damp:: longer than STRONG::decay:: means the
+spectrum never finishes collapsing, so the ring stays bright. Spectral centroid
+after the strike, measured on the default kick:
+
+TELETYPE::
+    damp        2 ms   10 ms   30 ms   80 ms   200 ms
+    0.004        43      80      94      50       41  Hz
+    0.02        213      95      54      48       56
+    0.09        170      90      67      68       46
+    0.6         525     300     185      98       70
+::
+
+The trip is made linearly in time, not exponentially, because STRONG::tilt:: is
+proportional to ln r and a modal decay has ln r falling at a constant rate.
+Exponentially, most of the collapse would happen in the first tenth of
+STRONG::damp:: and the parameter would not mean what its name says.
+
 METHOD:: perc
-A struck drum in one call: raw normalisation, a strike and the three envelopes,
-returning the waveform only. Everything else keeps its default, so this is just
-code::ar:: with the percussion arguments brought to the front.
+A struck drum in one call: raw normalisation and the envelopes, waveform only.
+Born struck, so with no STRONG::sync:: it plays once, which is all a
+synth-per-note needs.
 
 CODE::
-BlipSync.perc(strike, freq, decay, bend, damp, snap, tilt, maxfreq, minfreq, beater, mul, add)
+BlipSync.perc(freq, decay, bend, damp, tilt, sync, syncMode, maxfreq, beater, minfreq, mul, add)
+
+// a kick, complete
+BlipSync.perc(46) * 0.12
 ::
 
 STRONG::beater:: is link::#rotate::: it preserves the magnitude spectrum but
@@ -408,17 +426,19 @@ s.boot;
 
 // 6g. a drum, in one UGen. No EnvGens, no trigger: it is born struck.
 (
-{ BlipSync.perc(freq: 46, decay: 0.45, bend: 4.2, damp: 600, snap: 0.045,
-                tilt: -6) * 0.12 ! 2 }.play
+{ BlipSync.perc(46) * 0.12 ! 2 }.play
 )
 
-// 6h. the same struck in time. snap is the beater: 0.008 is a click, 0.06 a
-//     thump. Mouse X sweeps it.
+// 6h. the same struck in time. damp is the only shape control: 0.004 is a
+//     click, 0.09 a thump, longer than decay and the ring stays bright.
 (
-{
-    BlipSync.perc(Impulse.ar(2), 46, 0.45, 4.2, 600, MouseX.kr(0.005, 0.08),
-                  tilt: -6) * 0.12 ! 2
-}.play
+{ BlipSync.perc(46, damp: MouseX.kr(0.004, 0.6, 1), sync: Impulse.ar(2)) * 0.12 ! 2 }.play
+)
+
+// 6i. clocked by a phase ramp instead -- syncMode 1, so a PhaseLock output or
+//     any 0..1 ramp strikes it on the wrap
+(
+{ BlipSync.perc(46, sync: Phasor.ar(0, 2 * SampleDur.ir, 0, 1), syncMode: 1) * 0.12 ! 2 }.play
 )
 
 // 7. phase offset as an audio-rate input = phase modulation

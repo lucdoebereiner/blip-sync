@@ -56,22 +56,20 @@ BlipSync : MultiOutUGen {
     //                fast phase modulation band-limit itself instead of
     //                aliasing. INIT RATE.
     //
-    // --- percussion. A strike and the three envelopes it fires, so a drum is
-    //     one UGen rather than three EnvGens and a sync wire. All four are
-    //     inert at their defaults.
-    // strike    - trigger. On a rising edge it restarts both envelopes and
-    //             puts the impulse on the edge itself, sub-sample accurate.
-    //             The UGen is born struck, so a one-shot synth needs no
-    //             trigger at all -- give it a decay and it fires once.
+    // --- percussion. Two times and a pitch multiplier. There is no separate
+    //     strike input: sync already is one. Any sync event restarts these,
+    //     and the UGen is born struck, so a synth-per-note needs no trigger.
     // decay     - amplitude: seconds to fall 60 dB. 0 = no amplitude envelope.
     // bend      - pitch multiplier at the strike, falling to freq. 1 = none.
-    // damp      - dB/kHz of extra tilt reached by the end, so the spectrum
-    //             starts at tilt and darkens to tilt - damp as it rings. This
-    //             is the attack: it is the same exponential decay per harmonic
-    //             that a struck resonator has. 0 = none.
-    // snap      - seconds for bend and damp to travel 99% of the way. Short is
-    //             a click, long is a thump.
-    //             decay and snap are read once per block.
+    // damp      - seconds for the spectrum to collapse from tilt to a sine,
+    //             and for bend to land. Short is a click, long is a thump, and
+    //             longer than decay means the ring stays bright. 0 = no strike
+    //             shaping at all.
+    //             decay and damp are read once per block.
+    //
+    // The amounts are the parameters that already exist: tilt is how bright the
+    // strike is, maxfreq is how far that brightness reaches, and the damp/decay
+    // ratio is how bright the ring stays.
     //
     // Percussion wants normalize: 2. The other two modes are level-preserving
     // by design, so the band collapsing under damp stays as loud as the sine it
@@ -79,31 +77,31 @@ BlipSync : MultiOutUGen {
     *ar { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
           syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
           rotate = 0, tilt = 0, track = 0,
-          strike = 0, decay = 0, bend = 1, damp = 0, snap = 0.02|
+          decay = 0, bend = 1, damp = 0|
         ^this.multiNew('audio', freq, maxfreq, minfreq, phase, sync,
                        syncPhase, syncMode, iphase, normalize, rotate, tilt, track,
-                       strike, decay, bend, damp, snap)
+                       decay, bend, damp)
     }
 
     // Convenience: just the waveform.
     *arSig { |freq = 440, maxfreq = 20000, minfreq = 0, phase = 0, sync = 0,
               syncPhase = 0, syncMode = 0, iphase = 0, normalize = 0,
               rotate = 0, tilt = 0, track = 0,
-              strike = 0, decay = 0, bend = 1, damp = 0, snap = 0.02,
-              mul = 1, add = 0|
+              decay = 0, bend = 1, damp = 0, mul = 1, add = 0|
         ^BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
                      syncMode, iphase, normalize, rotate, tilt, track,
-                     strike, decay, bend, damp, snap).at(0).madd(mul, add)
+                     decay, bend, damp).at(0).madd(mul, add)
     }
 
-    // A struck drum in one call: raw normalisation, a strike, and the three
-    // envelopes. Returns the waveform only. Everything else keeps its default,
-    // so this is just BlipSync.ar with the percussion arguments to the front.
-    *perc { |strike = 0, freq = 46, decay = 0.4, bend = 4, damp = 600,
-             snap = 0.04, tilt = -6, maxfreq = 9000, minfreq = 0, beater = 0,
+    // A struck drum in one call: raw normalisation and the envelopes, waveform
+    // only. Born struck, so with no sync it plays once -- which is all a
+    // synth-per-note needs. Give it a trigger (or a 0..1 phase ramp with
+    // syncMode: 1) to retrigger it.
+    *perc { |freq = 46, decay = 0.45, bend = 4.2, damp = 0.045, tilt = -6,
+             sync = 0, syncMode = 0, maxfreq = 9000, beater = 0, minfreq = 0,
              mul = 1, add = 0|
-        ^BlipSync.ar(freq, maxfreq, minfreq, 0, 0, 0, 0, 0, 2, beater, tilt, 0,
-                     strike, decay, bend, damp, snap).at(0).madd(mul, add)
+        ^BlipSync.ar(freq, maxfreq, minfreq, 0, sync, 0, syncMode, 0, 2,
+                     beater, tilt, 0, decay, bend, damp).at(0).madd(mul, add)
     }
 
     init { |... theInputs|

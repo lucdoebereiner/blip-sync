@@ -8,10 +8,10 @@ input and an output.
 ```
 [ sig, phase ] = BlipSync.ar(freq, maxfreq, minfreq, phase, sync, syncPhase,
                              syncMode, iphase, normalize, rotate, tilt, track,
-                             strike, decay, bend, damp, snap)
+                             decay, bend, damp)
 
-         sig  = BlipSync.perc(strike, freq, decay, bend, damp, snap, tilt,
-                              maxfreq, minfreq, beater, mul, add)
+         sig  = BlipSync.perc(freq, decay, bend, damp, tilt, sync, syncMode,
+                              maxfreq, beater, minfreq, mul, add)
 ```
 
 Plus `PhaseLock`, a bank of phase-locked oscillators that emits phase ramps for
@@ -344,36 +344,51 @@ envelope at all), peak per 4 ms block relative to the settled body:
 With `normalize: 2` the whole envelope is already in the spectrum — the third
 row of that table needs no amplitude envelope to be a drum.
 
-Both envelopes live in the UGen, so none of this needs an `EnvGen`:
+Both envelopes live in the UGen, so a drum is one call and three numbers:
 
 ```supercollider
-BlipSync.perc(freq: 46, decay: 0.45, bend: 4.2, damp: 600, snap: 0.045, tilt: -6) * 0.12
+BlipSync.perc(46) * 0.12          // a kick, complete
 ```
 
-- **`strike`** restarts both envelopes and puts the impulse on the edge itself,
-  sub-sample accurate (landing two samples later, like `sync`). The UGen is
-  **born struck**, so a one-shot synth needs no trigger at all — the line above
-  plays a kick as it stands.
-- **`snap`** is the beater, and the most useful of the four: how long `bend` and
-  `damp` take. 0.006 s is a click, 0.07 s a thump.
-- **`damp`** is the attack: dB/kHz of extra tilt reached by the end, so the
-  spectrum starts at `tilt` and darkens to `tilt − damp` as it rings. Measured
-  +32.0 dB of attack over the body at `damp: 600`.
-- **`bend`** is the pitch multiplier at the strike, falling to `freq`.
-- **`decay`** is the amplitude T60 — measured 0.97 s for `decay: 1.0`. `0` means
-  no amplitude envelope at all.
-- **`rotate`** (`beater` in `perc`) is beater hardness. It preserves the
-  magnitude spectrum but spreads the impulse in time, so it drops the peak
-  without touching the loudness: 0 is a hard click, 0.22 a soft thud ~15 dB
-  lower in peak.
-- **Your output gain is the body level.** The fundamental's weight is 1 by
-  definition, so `* 0.12` means a body at 0.12 and an attack at
-  `0.12 × W(tilt at t=0)`.
+| | |
+|---|---|
+| `decay` | how long it rings — seconds to fall 60 dB (measured 0.97 s for `1.0`) |
+| `bend` | pitch multiplier at the strike, falling to `freq` |
+| `damp` | how fast the spectrum dies — **the** shape control |
 
-All five are inert at their defaults and the arithmetic then reduces to an exact
-multiply by 1 or add of 0, so the nine deterministic tests stay bit-identical.
-`decay` and `snap` are read once per block — they set a rate of change, not a
-value. `examples/percussion.scd` has the worked patches.
+There is no strike input, because **`sync` already is one**: it takes a trigger,
+or a 0..1 phase ramp under `syncMode: 1`, and resets the phase sub-sample
+accurately — which is what striking a drum means. Any sync event restarts the
+envelopes, so a `PhaseLock` output strikes a drum on every wrap with no trigger
+wiring at all. The UGen is also **born struck**, so a synth-per-note needs no
+trigger either: the line above plays as it stands.
+
+Every amount is a parameter that already existed — `tilt` is how bright the
+strike is, `maxfreq` how far that brightness reaches, `rotate` how hard the
+beater is, and the `damp`/`decay` ratio how bright the ring stays. Only the
+times are new.
+
+`damp` is the one worth a knob. Spectral centroid after the strike:
+
+| damp | 2 ms | 10 ms | 30 ms | 80 ms | 200 ms |
+|---|---|---|---|---|---|
+| 0.004 | 43 | 80 | 94 | 50 | 41 Hz |
+| 0.02 | 213 | 95 | 54 | 48 | 56 |
+| 0.09 | 170 | 90 | 67 | 68 | 46 |
+| 0.6 | 525 | 300 | 185 | 98 | 70 |
+
+A `damp` longer than `decay` means the spectrum never finishes collapsing, so
+the ring stays bright. The trip is made **linearly in time**, not exponentially,
+because `tilt ∝ ln r` and a modal decay has `ln r` falling at a constant rate —
+done exponentially, most of the collapse lands in the first tenth of `damp` and
+the parameter stops meaning what its name says.
+
+All three are inert at their defaults and the arithmetic then reduces to an
+exact multiply by 1 or subtract of 0, so the nine deterministic tests stay
+bit-identical — including the sync test, which proves the envelope restart costs
+nothing when the percussion parameters are off. `decay` and `damp` are read once
+per block; they set a rate of change, not a value. `examples/percussion.scd` has
+the worked patches.
 
 ### Hard sync
 
