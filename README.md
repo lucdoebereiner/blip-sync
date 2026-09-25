@@ -387,8 +387,37 @@ All three are inert at their defaults and the arithmetic then reduces to an
 exact multiply by 1 or subtract of 0, so the nine deterministic tests stay
 bit-identical — including the sync test, which proves the envelope restart costs
 nothing when the percussion parameters are off. `decay` and `damp` are read once
-per block; they set a rate of change, not a value. `examples/percussion.scd` has
-the worked patches.
+per block; they set a rate of change, not a value.
+
+### Travelling between the two
+
+`perc` fixes a shape; `ar` lets you move. Sweeping the three times morphs
+continuously from a pulse train to a drum with nothing switching. Two things
+make it work:
+
+- **Never sweep `decay` or `damp` through zero.** Zero means *off*, an infinite
+  time, while just above zero means *instant* — so they jump from "no envelope
+  at all" to "silent immediately" as they cross. Morph between a long time and a
+  short one: 8 s → 0.25 s.
+- **Make the pitch an integer multiple of the strike rate.** The strike resets
+  the phase, and if the oscillator is already at phase 0 when it arrives, that
+  reset is a no-op. Measured discontinuity at the strike instants, against the
+  99th-percentile sample-to-sample jump elsewhere in the same waveform:
+
+| | jump at the strike | ratio to the waveform's own |
+|---|---|---|
+| `freq: 46` — 23 × a 2 Hz strike | 0.0029 | **0.40** |
+| `freq: 47` — not a multiple | 0.1028 | **14.2** |
+| no sync at all | 0.0033 | 0.44 |
+
+On the multiple it is indistinguishable from never striking at all; off it,
+every strike is an audible click. Inside a `PhaseLock` bank this comes free —
+the ratios are integers by construction.
+
+`normalize` is init-rate, so a morph commits to `2`. Level then holds within
+6 dB across the whole travel with a modest gain term, and the peak stays under
+0.25. `examples/percussion.scd` has the fixed shapes,
+[`examples/morph.scd`](examples/morph.scd) the travelling ones.
 
 ### Hard sync
 
